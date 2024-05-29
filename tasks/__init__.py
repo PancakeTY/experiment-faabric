@@ -13,7 +13,7 @@ from tasks.makespan import ns as makespan_ns
 from tasks.migration import ns as migration_ns
 from tasks.motivation import ns as motivation_ns
 from tasks.polybench import ns as polybench_ns
-
+from tasks.stream_hello import ns as stream_hello_ns
 
 logging.getLogger().setLevel(logging.DEBUG)
 
@@ -30,3 +30,4 @@ ns.add_collection(makespan_ns, name="makespan")
 ns.add_collection(migration_ns, name="migration")
 ns.add_collection(motivation_ns, name="motivation")
 ns.add_collection(polybench_ns, name="polybench")
+ns.add_collection(stream_hello_ns, name="stream_hello")
