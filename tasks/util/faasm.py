@@ -33,9 +33,34 @@ def get_faasm_exec_chained_milli_time_from_json(results_json, check=False):
     """
     # Group the results by chain ID and find the actual_time for each chained functions
     grouped_results = defaultdict(list)
+    function_metrics = defaultdict(lambda: defaultdict(list))
+
     for result in results_json:
         chained_id = result['chainedId']
         grouped_results[chained_id].append(result)
+        planner_queue_time = int(result['plannerQueueTime'])
+        planner_pop_time = int(result['plannerPopTime'])
+        planner_dispatch_time = int(result['plannerDispatchTime'])
+        worker_queue_time = int(result['workerQueueTime'])
+        worker_pop_time = int(result['workerPopTime'])
+        executor_prepare_time = int(result['ExecutorPrepareTime'])
+        worker_execute_start_time = int(result['workerExecuteStart'])
+        worker_execute_end_time = int(result['workerExecuteEnd'])
+
+        function_name = result['user'] + '_' + result['function']
+        # function_name = result['user'] + '_' + result['function'] + '_' + result['parallelismId']
+        planner_queue_elapse = planner_pop_time - planner_queue_time
+        planner_consumed_elapse = planner_dispatch_time - planner_pop_time
+        worker_queue_elapse = worker_pop_time - worker_queue_time
+        worker_execute_elapse = worker_execute_end_time - worker_execute_start_time
+        total_elapse = worker_execute_end_time - planner_queue_time
+
+        function_metrics[function_name]['planner_queue_elapse'].append(planner_queue_elapse)
+        function_metrics[function_name]['planner_consumed_elapse'].append(planner_consumed_elapse)
+        function_metrics[function_name]['worker_queue_elapse'].append(worker_queue_elapse)
+        function_metrics[function_name]['executor_prepare_time'].append(executor_prepare_time)
+        function_metrics[function_name]['worker_execute_elapse'].append(worker_execute_elapse)
+        function_metrics[function_name]['total_elapse'].append(total_elapse)
 
     actual_times = {}
     for chained_id, results in grouped_results.items():
@@ -44,11 +69,7 @@ def get_faasm_exec_chained_milli_time_from_json(results_json, check=False):
         actual_time = int(finish_ts) - int(start_ts)
         actual_times[chained_id] = actual_time
 
-    # # Print the actual_times for each chainedId
-    # for chained_id, actual_time in actual_times.items():
-    #     print(f"Chained ID: {chained_id}, Actual Time: {actual_time}")
-
-    return actual_times
+    return actual_times, function_metrics
 
 
 def get_faasm_planner_host_port():
