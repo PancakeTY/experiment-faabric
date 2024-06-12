@@ -46,9 +46,11 @@ def get_faasm_exec_chained_milli_time_from_json(results_json, check=False):
         executor_prepare_time = int(result['ExecutorPrepareTime'])
         worker_execute_start_time = int(result['workerExecuteStart'])
         worker_execute_end_time = int(result['workerExecuteEnd'])
-
-        function_name = result['user'] + '_' + result['function']
-        # function_name = result['user'] + '_' + result['function'] + '_' + result['parallelismId']
+        function_name = "unknown"
+        if result.get('parallelismId') is not None:
+            function_name = result['user'] + '_' + result['function'] + '_' + str(result['parallelismId'])
+        else:
+            function_name = result['user'] + '_' + result['function']
         planner_queue_elapse = planner_pop_time - planner_queue_time
         planner_consumed_elapse = planner_dispatch_time - planner_pop_time
         worker_queue_elapse = worker_pop_time - worker_queue_time
