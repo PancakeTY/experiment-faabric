@@ -130,6 +130,7 @@ def test_contention(ctx, scale=3, batchsize=0):
     """
     file_path = 'tasks/stream_hello/pg-being_ernest.txt'
     sentences = read_sentences_from_file(file_path)
+    total_sentences = len(sentences)
 
     flush_workers()
     flush_scheduler()
@@ -157,14 +158,19 @@ def test_contention(ctx, scale=3, batchsize=0):
     start_time = time.time()
     end_time = start_time + limit_time
     batch_start = 0
-    batch_end = 99
+    batch_size = 100
+
     # Invoke the function in batches
     while time.time() < end_time and batch_start < len(sentences):
+        batch_end = min(batch_start + batch_size - 1, total_sentences - 1)
         input_data = generate_input_data(sentences, batch_start, batch_end)
-        appid = post_async_batch_msg(appid, msg, 100, input_data)
+        appid = post_async_batch_msg(appid, msg, batch_end - batch_start + 1, input_data)
         appid_list.append(appid)
         appid += 1
-    
+        batch_start += batch_size
+        if batch_start + batch_size >= total_sentences -1:
+            batch_start = 0  # Restart from the beginning if the end is reached
+
     def get_result_thread(appid):
         try:
             ber_status = query_result(appid)
