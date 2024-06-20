@@ -124,7 +124,7 @@ def generate_input_data(sentences, start, end):
     return [{"sentence": sentence} for sentence in sentences[start:end + 1]]
 
 @task
-def test_contention(ctx, batchsize=0):
+def test_contention(ctx, scale=3, batchsize=0):
     """
     Test the 'wordcount' function with resource contention.
     """
@@ -143,6 +143,8 @@ def test_contention(ctx, batchsize=0):
     print(input_data)
     appid = post_async_batch_msg(appid, msg, 1, input_data)
     query_result(appid)
+
+    scale_function_parallelism("stream", "wordcount_count" ,scale)
 
     if batchsize > 0:
         reset_batch_size(batchsize)
