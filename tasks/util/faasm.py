@@ -106,7 +106,7 @@ def get_faasm_metrics_from_json(json_result, deadline):
     for msg_result in json_result:
         chained_id = msg_result['chainedId']
         if chained_id in invalid_chained_ids:
-            print(f"Skip invalid chained_id: {chained_id}")
+            # print(f"Skip invalid chained_id: {chained_id}")
             continue
         # Get the mertics
         planner_queue_time = int(msg_result['plannerQueueTime'])
@@ -161,6 +161,8 @@ def post_async_batch_msg(app_id, msg, batch_size=100, input_list=None):
         print ("ERROR: batch_size != len(input_data)")
         assert False
     appid = faasmctl_invoke_wasm_without_wait(app_id, msg_dict=msg, num_messages=batch_size, input_list=input_list)
-    if appid != appid:
+    if appid is None:
+        print ("ERROR: AppID invoke failed")
+    elif appid != appid:
         print ("ERROR: AppID mismatch")
     return appid

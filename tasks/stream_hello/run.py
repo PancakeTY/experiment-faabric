@@ -150,7 +150,7 @@ def test_contention(ctx, scale=3, batchsize=0):
     if batchsize > 0:
         reset_batch_size(batchsize)
 
-    limit_time = 10
+    limit_time = 20
 
     appid = 100000
     appid_list = []
@@ -164,9 +164,10 @@ def test_contention(ctx, scale=3, batchsize=0):
     while time.time() < end_time and batch_start < len(sentences):
         batch_end = min(batch_start + batch_size - 1, total_sentences - 1)
         input_data = generate_input_data(sentences, batch_start, batch_end)
-        appid = post_async_batch_msg(appid, msg, batch_end - batch_start + 1, input_data)
-        appid_list.append(appid)
-        appid += 1
+        appid_return = post_async_batch_msg(appid, msg, batch_end - batch_start + 1, input_data)
+        if appid_return is not None:
+            appid_list.append(appid_return)
+            appid += 1
         batch_start += batch_size
         if batch_start + batch_size >= total_sentences -1:
             batch_start = 0  # Restart from the beginning if the end is reached
