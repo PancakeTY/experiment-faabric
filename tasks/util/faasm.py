@@ -86,7 +86,7 @@ def get_faasm_metrics_from_json(json_result, deadline):
     # Group the results by chain ID and find the actual_time for each chained functions
     grouped_results = defaultdict(list)
     function_metrics = defaultdict(lambda: defaultdict(list))
-
+    print(len(json_result))
     for msg_result in json_result:
         chained_id = msg_result['chainedId']
         grouped_results[chained_id].append(msg_result)
@@ -148,8 +148,17 @@ def get_faasm_version():
     return "0.0.0"
 
 
-def post_async_msg_and_get_result_json(msg, host_list=None):
-    result = faasmctl_invoke_wasm(msg, num_messages=100, dict_out=True, host_list=host_list)
+def post_async_msg_and_get_result_json(msg, host_list=None, req_dict=None, input_list=None):
+    chainedId_list = []
+    chainedId_list.append(2)
+    result = faasmctl_invoke_wasm(
+        msg,
+        dict_out=True,
+        host_list=host_list,
+        req_dict=req_dict,
+        input_list=input_list,
+        chainedId_list=chainedId_list
+    )
     return result["messageResults"]
 
 def post_async_batch_msg_and_get_result_json(msg, batch_size=100, host_list=None):
