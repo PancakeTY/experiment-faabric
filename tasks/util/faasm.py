@@ -18,6 +18,29 @@ def get_faasm_exec_time_from_json(results_json, check=False):
     actual_time = float(int(finish_ts) - int(start_ts)) / 1000
     return actual_time
 
+def get_chained_faasm_exec_time_from_json(results_json, check=False):
+    """
+    Return the execution time (included in Faasm's response JSON) in milliseconds
+    """
+    # Group the results by chainedId
+    grouped_results = defaultdict(list)
+    for result in results_json:
+        chained_id = result["chainedId"]
+        grouped_results[chained_id].append(result)
+    
+    # Calculate the execution time for each group
+    total_time = 0
+    for chained_id, group in grouped_results.items():
+        start_ts = min([result["start_ts"] for result in group])
+        finish_ts = max([result["finish_ts"] for result in group])
+        actual_time = int(finish_ts) - int(start_ts)
+        total_time += actual_time
+    
+    # Return the total execution time and the number of unique chainedIds
+    num_chained_ids = len(grouped_results)
+
+    return total_time, num_chained_ids
+
 def get_faasm_exec_milli_time_from_json(results_json, check=False):
     """
     Return the execution time (included in Faasm's response JSON) in milliseconds
@@ -148,11 +171,10 @@ def get_faasm_version():
     return "0.0.0"
 
 
-def post_async_msg_and_get_result_json(msg, host_list=None, req_dict=None, input_list=None):
-    chainedId_list = []
-    chainedId_list.append(2)
+def post_async_msg_and_get_result_json(msg, num_messages = 1, host_list=None, req_dict=None, input_list=None, chainedId_list = None):
     result = faasmctl_invoke_wasm(
         msg,
+        num_messages = num_messages,
         dict_out=True,
         host_list=host_list,
         req_dict=req_dict,
