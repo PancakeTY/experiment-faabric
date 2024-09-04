@@ -19,6 +19,29 @@ def get_faasm_exec_time_from_json(results_json, check=False):
     actual_time = float(int(finish_ts) - int(start_ts)) / 1000
     return actual_time
 
+def get_chained_faasm_exec_time_from_json(results_json, check=False):
+    """
+    Return the execution time (included in Faasm's response JSON) in milliseconds
+    """
+    # Group the results by chainedId
+    grouped_results = defaultdict(list)
+    for result in results_json:
+        chained_id = result["chainedId"]
+        grouped_results[chained_id].append(result)
+    
+    # Calculate the execution time for each group
+    total_time = 0
+    for chained_id, group in grouped_results.items():
+        start_ts = min([result["start_ts"] for result in group])
+        finish_ts = max([result["finish_ts"] for result in group])
+        actual_time = int(finish_ts) - int(start_ts)
+        total_time += actual_time
+    
+    # Return the total execution time and the number of unique chainedIds
+    num_chained_ids = len(grouped_results)
+
+    return total_time, num_chained_ids
+
 def get_faasm_exec_milli_time_from_json(results_json, check=False):
     """
     Return the execution time (included in Faasm's response JSON) in milliseconds

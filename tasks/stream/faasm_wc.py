@@ -5,7 +5,7 @@ import threading
 import re
 
 from tasks.util.faasm import (
-    get_faasm_exec_time_from_json,
+    get_chained_faasm_exec_time_from_json,
     post_async_msg_and_get_result_json,
 )
 
@@ -46,35 +46,36 @@ def generate_input_data(sentences, start, end):
     return [{"sentence": sentence} for sentence in sentences[start:end + 1]]
 
 
-def send_message_and_get_result(input_data):
+def send_message_and_get_result(input_id, input_data, input_batch):
     msg = {
         "user": "stream",
         "function": "wc_split",
     }
-    result_json = post_async_msg_and_get_result_json(msg, input_list=input_data)
-    print(len(result_json))
-    actual_time = get_faasm_exec_time_from_json(result_json)
-    return actual_time
+    # chained Id should start from 1
+    chainedId_list = list(range(input_id + 1, input_id + 1 + input_batch))
 
-def worker_thread(end_time, sentences, atomic_count):
+    result_json = post_async_msg_and_get_result_json(msg, num_messages = input_batch, input_list=input_data, chainedId_list = chainedId_list)
+    actual_times, num = get_chained_faasm_exec_time_from_json(result_json)
+    return actual_times, num
+    
+def worker_thread(end_time, sentences, atomic_count, input_batch):
     count = 0
     total_time = 0
 
     while time.time() < end_time:
         try:
-            input_id = atomic_count.get_and_increment()
-            input_data = generate_input_data(sentences, input_id, input_id)
-            print(input_data)
-            actual_time = send_message_and_get_result(input_data)
-            total_time += actual_time
-            count += 1
+            input_id = atomic_count.get_and_increment(input_batch)
+            input_data = generate_input_data(sentences, input_id, input_id + input_batch -1)
+            actual_times, num = send_message_and_get_result(input_id, input_data, input_batch)
+            total_time += actual_times
+            count += num
         except Exception as exc:
-            print(f"Generated an exception: {exc}")
+            print(f"Worker Generated an exception: {exc}")
 
     return count, total_time
 
 @task(default=True)
-def run(ctx):
+def run(ctx, input_batch = 1):
     """
     Use multiple threads to run the 'wordcount' application and check latency and throughput.
     """
@@ -89,15 +90,17 @@ def run(ctx):
     total_count = 0
     total_time = 0
     atomic_count = AtomicInteger(0)
+    lock = threading.Lock()  # Create a lock
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=WORKER_NUM) as executor:
-        futures = [executor.submit(worker_thread, end_time, sentences, atomic_count) for _ in range(WORKER_NUM)]
+        futures = [executor.submit(worker_thread, end_time, sentences, atomic_count, input_batch) for _ in range(WORKER_NUM)]
 
         for future in concurrent.futures.as_completed(futures):
             try:
                 count, time_spent = future.result()
-                total_count += count
-                total_time += time_spent
+                with lock:
+                    total_count += count
+                    total_time += time_spent
             except Exception as exc:
                 print(f"Generated an exception: {exc}")
 
