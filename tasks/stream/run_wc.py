@@ -19,8 +19,7 @@ from tasks.util.faasm import (
 def send_message_and_get_result(size=50):
     msg = {
         "user": "stream",
-        "function": "wordcount_source",
-        # "function": "function_parstate_source",
+        "function": "wordcountindiv_split",
     }
     result_json = post_async_batch_msg_and_get_result_json(msg,size)
     msg_actual_times, msg_function_metrics , unused1, unuesd2= get_faasm_exec_chained_milli_time_from_json(result_json)
@@ -45,17 +44,26 @@ def worker_thread(end_time):
     return worker_count, worker_total_time, worker_function_metrics
 
 @task(default=True)
-def test(ctx, scale=3, batchsize=0):
+def test(ctx, scale=1, batchsize=0, messageSize = 50):
     """
     Use ten threads to run the 'hello' demo and check latency and throughput.
     In the next 5 minutes, send messages to the 'hello' function using ten threads.
     """
+    # load data
+    file_path = 'tasks/stream/data/books.txt'
+    sentences = read_sentences_from_file(file_path)
+    total_sentences = len(sentences)
+
+    # flush executors and register function state
     flush_workers()
     flush_scheduler()
+    register_function_state("stream_wordcountindiv_count", "partitionedAttribute", "partitionStateKey")
+    #
     send_message_and_get_result(1)
-    scale_function_parallelism("stream", "wordcount_count" ,scale)
+    if scale > 1:
+        scale_function_parallelism("stream", "wordcountindiv_count" ,scale)
 
-    end_time = time.time() + 10  # Running for 5 minutes
+    end_time = time.time() + 100  # Running for 5 minutes
     total_count = 0
     total_time = 0
     worker_num = 30
@@ -91,7 +99,7 @@ def test(ctx, scale=3, batchsize=0):
 def send_message_without_result(size=50):
     msg = {
         "user": "stream",
-        "function": "wordcount_source",
+        "function": "wordcountindiv_split",
     }
     result_json = post_async_batch_msg_and_get_result_json(msg,size)
     actual_times, function_metrics, unused1, unused2 = get_faasm_exec_chained_milli_time_from_json(result_json)
@@ -113,7 +121,7 @@ def read_sentences_from_file(file_path):
     print(f"Total words extracted: {len(words)}")
 
     # Group words into sentences of 10 words each
-    sentences = [' '.join(words[i:i+10]) for i in range(0, len(words), 100)]
+    sentences = [' '.join(words[i:i+10]) for i in range(0, len(words), 10)]
     print(f"Total sentences created: {len(sentences)}")
 
     return sentences
@@ -148,12 +156,12 @@ def test_contention(ctx, scale=1, batchsize=50):
     query_result(appid)
 
     if scale > 1:
-        scale_function_parallelism("stream", "wordcount_countindiv" ,scale)
+        scale_function_parallelism("stream", "wordcountindiv_count" ,scale)
 
     if batchsize > 0:
         reset_batch_size(batchsize)
 
-    limit_time = 60
+    limit_time = 10
 
     appid = 100000
     appid_list = []

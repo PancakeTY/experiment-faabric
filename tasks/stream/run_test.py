@@ -2,59 +2,50 @@ import time
 from collections import defaultdict
 from invoke import task
 from faasmctl.util.flush import flush_workers, flush_scheduler
-from faasmctl.util.planner import reset_batch_size, scale_function_parallelism, register_function_state
+from faasmctl.util.planner import reset_batch_size, scale_function_parallelism
 from faasmctl.util.invoke import query_result
 import concurrent.futures
 from google.protobuf.json_format import MessageToDict
 import threading
-import re
+import csv
 
 from tasks.util.faasm import (
-    get_faasm_exec_chained_milli_time_from_json,
     get_faasm_metrics_from_json,
-    post_async_batch_msg_and_get_result_json,
     post_async_batch_msg,
 )
 
-def send_message_without_result(size=50):
-    msg = {
-        "user": "stream",
-        "function": "sd_moving_avg",
-    }
-    result_json = post_async_batch_msg_and_get_result_json(msg,size)
-    actual_times, function_metrics, unused1, unused2 = get_faasm_exec_chained_milli_time_from_json(result_json)
-    return actual_times, function_metrics
-
 def read_data_from_file(file_path):
-    data_vectors = []
-    with open(file_path, 'r') as file:
-        for line in file:
-            data = line.strip().split()
-            data_vectors.append(data)
-    return data_vectors
+    records = []
+    with open(file_path, 'r') as file:  # Open the file
+        reader = csv.reader(file)
+        for data in reader:
+            records.append(data)
+    return records
 
 # Helper function to generate input data ranges
+# machine_id, time_stamp, cpu, mem
 def generate_input_data(records, start, end):
-    return [{"partitionedAttribute": record[3], 
-             "temperature": record[4]} for record in records[start:end + 1]]
+    return [{"machineId": record[0].split('_')[1], 
+             "score": record[2], 
+             "sumScore": record[3], 
+             "timestamp": record[1]} for record in records[start:end + 1]]
 
 @task
-def test_contention(ctx, scale=3, batchsize=50):
+def test_contention(ctx, scale=1, batchsize=50):
     """
-    Test the 'wordcount' function with resource contention.
+    Test the 'machine outlier' function with resource contention.
     """
-    file_path = 'tasks/stream/data/data_sensor.txt'
+    file_path = 'tasks/stream/data/machine_usage.csv'
     records = read_data_from_file(file_path)
     records_len = len(records)
 
-    flush_workers()
-    flush_scheduler()
+    # flush_workers()
+    # flush_scheduler()
 
     msg = {
         "user": "stream",
-        "function": "sd_moving_avg",
+        "function": "mo_alert",
     }
-    register_function_state("stream_sd_moving_avg", "partitionedAttribute", "partitionStateKey")
 
     input_data = generate_input_data(records, 0, 0)
     appid = 1
@@ -62,12 +53,11 @@ def test_contention(ctx, scale=3, batchsize=50):
     appid = post_async_batch_msg(appid, msg, 1, input_data)
     query_result(appid)
 
+    # if scale > 1:
+    #     scale_function_parallelism("stream", "wordcount_countindiv" ,scale)
 
-    if scale > 1:
-        scale_function_parallelism("stream", "sd_moving_avg" ,scale)
-
-    if batchsize > 0:
-        reset_batch_size(batchsize)
+    # if batchsize > 0:
+    #     reset_batch_size(batchsize)
 
     limit_time = 10
 
