@@ -10,7 +10,7 @@ from tasks.util.kernels import (
     OPENMP_KERNELS_PLOTS_DIR,
     OPENMP_KERNELS_RESULTS_DIR,
 )
-from tasks.util.plot import save_plot
+from tasks.util.plot import UBENCH_PLOT_COLORS, SINGLE_COL_FIGSIZE, save_plot
 
 
 def _read_results():
@@ -47,7 +47,7 @@ def plot(ctx):
     """
     result_dict = _read_results()
     makedirs(OPENMP_KERNELS_PLOTS_DIR, exist_ok=True)
-    fig, ax = subplots(figsize=(6, 3))
+    fig, ax = subplots(figsize=SINGLE_COL_FIGSIZE)
 
     num_kernels = len(OPENMP_KERNELS)
     width = float(1 / (num_kernels + 1))
@@ -85,6 +85,7 @@ def plot(ctx):
             ys,
             width,
             label=kernel,
+            color=UBENCH_PLOT_COLORS[ind_kernel],
             edgecolor="black",
         )
 
@@ -93,14 +94,16 @@ def plot(ctx):
     ax.set_xticks(xs, labels=nprocs)
 
     # Horizontal line at slowdown of 1
-    xlim_left = -0.5
+    xlim_left = -(0.5 + width)
     xlim_right = len(nprocs) - 0.5
     ax.hlines(1, xlim_left, xlim_right, linestyle="dashed", colors="red")
 
     ax.set_xlim(left=xlim_left, right=xlim_right)
     ax.set_ylim(bottom=0, top=ymax)
     ax.set_xlabel("Number of OpenMP threads")
-    ax.set_ylabel("Slowdown \n [{} / OpenMPI]".format(SYSTEM_NAME))
-    ax.legend(loc="upper right", ncol=4, bbox_to_anchor=(0.95, 1.35))
+    ax.set_ylabel("Slowdown \n [{} / OpenMP]".format(SYSTEM_NAME))
+    ax.legend(
+        loc="upper right", ncol=5, bbox_to_anchor=(1.00, 1.17), fontsize=9
+    )
 
     save_plot(fig, OPENMP_KERNELS_PLOTS_DIR, "openmp_kernels_slowdown")

@@ -2,7 +2,12 @@ from faasmctl.util.config import (
     get_faasm_worker_ips,
     get_faasm_worker_names,
 )
-from faasmctl.util.flush import flush_workers
+from faasmctl.util.planner import (
+    get_in_fligh_apps as planner_get_in_fligh_apps,
+    set_next_evicted_host as planner_set_next_evicted_host,
+    wait_for_workers as planner_wait_for_workers,
+)
+from faasmctl.util.restart import replica as restart_faasm_replica
 from logging import (
     getLogger,
     INFO as log_level_INFO,
@@ -10,7 +15,29 @@ from logging import (
 from multiprocessing import Process, Queue
 from multiprocessing.queues import Empty as Queue_Empty
 from os.path import basename
+from random import sample
+from subprocess import CalledProcessError
 from typing import Dict, List, Tuple, Union
+from tasks.makespan.data import (
+    ExecutedTaskInfo,
+    ResultQueueItem,
+    TaskObject,
+    WorkQueueItem,
+)
+from tasks.util.elastic import (
+    ELASTIC_KERNEL,
+    OPENMP_ELASTIC_FUNCTION,
+    OPENMP_ELASTIC_NATIVE_BINARY,
+    OPENMP_ELASTIC_USER,
+    get_elastic_input_data,
+)
+from tasks.util.faasm import (
+    get_faasm_exec_time_from_json,
+    has_app_failed,
+    post_async_msg_and_get_result_json,
+)
+from tasks.util.kernels import get_openmp_kernel_cmdline
+from tasks.util.k8s import wait_for_pods as wait_for_native_mpi_pods
 from tasks.util.lammps import (
     LAMMPS_FAASM_USER,
     LAMMPS_DOCKER_BINARY,
@@ -19,40 +46,43 @@ from tasks.util.lammps import (
     LAMMPS_MIGRATION_NET_DOCKER_BINARY,
     LAMMPS_MIGRATION_NET_DOCKER_DIR,
     LAMMPS_SIM_NUM_ITERATIONS,
-    get_faasm_benchmark,
+    get_lammps_data_file,
     get_lammps_migration_params,
+    get_lammps_workload,
 )
-from tasks.makespan.data import (
-    ExecutedTaskInfo,
-    ResultQueueItem,
-    TaskObject,
-    WorkQueueItem,
-)
-from tasks.makespan.env import (
-    DGEMM_DOCKER_BINARY,
-    DGEMM_FAASM_FUNC,
-    DGEMM_FAASM_USER,
-    get_dgemm_cmdline,
-)
-from tasks.makespan.util import (
+from tasks.util.makespan import (
     ALLOWED_BASELINES,
     EXEC_TASK_INFO_FILE_PREFIX,
     GRANNY_BASELINES,
-    # Important!
-    MPI_LAMMPS_BENCHMARK,
+    GRANNY_BATCH_BASELINES,
+    GRANNY_ELASTIC_BASELINES,
+    GRANNY_FT_BASELINES,
+    GRANNY_MIGRATE_BASELINES,
     MPI_MIGRATE_WORKLOADS,
     MPI_WORKLOADS,
     NATIVE_BASELINES,
-    SCHEDULINNG_INFO_FILE_PREFIX,
+    NATIVE_FT_BASELINES,
+    OPENMP_WORKLOADS,
+    SCHEDULING_INFO_FILE_PREFIX,
     get_num_cpus_per_vm_from_trace,
+    get_user_id_from_task,
+    get_workload_from_trace,
     write_line_to_csv,
 )
-from tasks.util.faasm import (
-    get_faasm_exec_time_from_json,
-    post_async_msg_and_get_result_json,
+from tasks.util.openmpi import (
+    get_native_mpi_namespace,
+    get_native_mpi_pods,
+    restart_native_mpi_pod,
+    run_kubectl_cmd,
 )
-from tasks.util.openmpi import get_native_mpi_pods, run_kubectl_cmd
+from tasks.util.planner import (
+    get_num_available_slots_from_in_flight_apps,
+    get_num_idle_cpus_from_in_flight_apps,
+    get_num_xvm_links_from_in_flight_apps,
+)
 from time import sleep, time
+
+ALL_FT_BASELINES = GRANNY_FT_BASELINES + NATIVE_FT_BASELINES
 
 # Configure a global logger for the scheduler
 getLogger("root").setLevel(log_level_INFO)
@@ -65,16 +95,95 @@ NOT_ENOUGH_SLOTS = "NOT_ENOUGH_SLOTS"
 QUEUE_TIMEOUT_SEC = 10
 QUEUE_SHUTDOWN = "QUEUE_SHUTDOWN"
 INTERTASK_SLEEP = 1
+# How often do we query the planner for cluster occupation
+PLANNER_MONITOR_RESOLUTION_SECS = 4
+
+
+def has_task_failed(result: ResultQueueItem):
+    return result.exec_time == -1
+
+
+def fault_injection_thread(
+    baseline,
+    num_vms,
+    fault_injection_period_secs,
+    host_grace_period_secs,
+    num_faults,
+):
+    """
+    Thread used to periodically inject faults in a running cluster
+
+    The two arguments after the baseline determine the profile of our spot VM
+    simulation. The grace period value we get from Azure's reference, and the
+    FT period we make up. We could consider changing them but, for simplicity
+    we keep them the same
+    """
+
+    def get_next_evicted_host(baseline, num_hosts_to_evict):
+        if baseline in GRANNY_BASELINES:
+            vm_names = get_faasm_worker_names()
+            vm_ips = get_faasm_worker_ips()
+        else:
+            vm_names, vm_ips = get_native_mpi_pods("makespan")
+
+        assert (
+            len(vm_names) == num_vms
+        ), "Mismatch in FT thread picking next evicted host {} != {}".format(
+            num_vms, len(vm_names)
+        )
+
+        evicted_idxs = sample(range(0, len(vm_names)), num_hosts_to_evict)
+        evicted_vm_names = [
+            vm_names[evicted_idx] for evicted_idx in evicted_idxs
+        ]
+        evicted_vm_ips = [vm_ips[evicted_idx] for evicted_idx in evicted_idxs]
+
+        return evicted_vm_names, evicted_vm_ips
+
+    # Main fault-injection loop. We have two periods that determine the loop:
+    # (i) how often we inject a fault, and (ii) how much heads-up we give the
+    # batch-scheduler (grace period). In the loop, we first sleep for (i) -
+    # (ii) and then for (ii)
+    while True:
+        next_evicted_hosts, next_evicted_ips = get_next_evicted_host(
+            baseline, num_faults
+        )
+
+        # First, sleep until we need to give the grace period
+        sleep(fault_injection_period_secs - host_grace_period_secs)
+
+        # Then, notify that the host will be evicted (only Granny understands
+        # this)
+        if baseline in GRANNY_BASELINES:
+            planner_set_next_evicted_host(next_evicted_ips)
+
+        # Now sleep for the grace period
+        sleep(host_grace_period_secs)
+
+        # Finally, restart the host to simulate a spot VM eviction (aka fault)
+        if baseline in GRANNY_BASELINES:
+            restart_faasm_replica(next_evicted_hosts)
+
+            # Wait for workers to be ready
+            planner_wait_for_workers(num_vms)
+        else:
+            restart_native_mpi_pod("makespan", next_evicted_hosts)
 
 
 def dequeue_with_timeout(
-    queue: Queue, queue_str: str, silent: bool = False
+    queue: Queue,
+    queue_str: str,
+    silent: bool = False,
+    throw: bool = False,
+    timeout_s: int = QUEUE_TIMEOUT_SEC,
 ) -> Union[ResultQueueItem, WorkQueueItem]:
     while True:
         try:
-            result = queue.get(timeout=QUEUE_TIMEOUT_SEC)
+            result = queue.get(timeout=timeout_s)
             break
         except Queue_Empty:
+            if throw:
+                raise Queue_Empty
             if not silent:
                 sch_logger.debug(
                     "Timed-out dequeuing from {}. Trying again...".format(
@@ -90,8 +199,10 @@ def thread_pool_thread(
     result_queue: Queue,
     thread_idx: int,
     baseline: str,
-    vm_ip_to_name: Dict[str, str],
+    num_vms: int,
     num_cpus_per_vm: int,
+    num_tasks_per_user: int,
+    trace_str: str,
 ) -> None:
     """
     Loop for the worker threads in the thread pool. Each thread performs a
@@ -103,22 +214,76 @@ def thread_pool_thread(
 
     thread_print("Pool thread {} starting".format(thread_idx))
 
+    if thread_idx == 0:
+        if baseline in NATIVE_BASELINES:
+            return
+
+        read_one = False
+        while True:
+            sleep(PLANNER_MONITOR_RESOLUTION_SECS)
+
+            in_flight_apps = planner_get_in_fligh_apps()
+            idle_vms, idle_cpus = get_num_idle_cpus_from_in_flight_apps(
+                num_vms,
+                num_cpus_per_vm,
+                in_flight_apps,
+            )
+
+            if read_one and len(in_flight_apps.apps) == 0:
+                print("Zero in-flight apps. Shutting down poller thread...")
+                break
+            elif len(in_flight_apps.apps) != 0:
+                read_one = True
+
+            write_line_to_csv(
+                baseline,
+                SCHEDULING_INFO_FILE_PREFIX,
+                num_vms,
+                num_tasks_per_user,
+                trace_str,
+                time(),
+                idle_vms,
+                idle_cpus,
+                get_num_xvm_links_from_in_flight_apps(in_flight_apps),
+            )
+
     work_queue: WorkQueueItem
     while True:
         work_item = dequeue_with_timeout(work_queue, "work queue", silent=True)
+        has_failed = False
 
         # IP for the master VM
-        master_vm_ip = work_item.sched_decision[0][0]
+        master_vm_ip = None
+        if len(work_item.sched_decision) > 0:
+            master_vm_ip = work_item.sched_decision[0][0]
+
+        if baseline in NATIVE_BASELINES and master_vm_ip != QUEUE_SHUTDOWN:
+            # Get the VM name for an IP directly from kuberenetes every
+            # time, as the translation may become stale in a faulty
+            # workload (e.g. mpi-spot)
+            names, ips = get_native_mpi_pods("makespan")
+            for name, ip in zip(names, ips):
+                if ip == master_vm_ip:
+                    master_vm = name
+
         # Check for shutdown message
         if master_vm_ip == QUEUE_SHUTDOWN:
             break
-        # Operate with the VM name rather than IP
-        master_vm = vm_ip_to_name[master_vm_ip]
 
         # Choose the right data file if running a LAMMPS simulation
         if work_item.task.app in MPI_WORKLOADS:
-            # We always use the same LAMMPS benchmark ("compute-xl")
-            data_file = get_faasm_benchmark(MPI_LAMMPS_BENCHMARK)["data"][0]
+            if work_item.task.app == "mpi-locality":
+                lammps_workload = "very-network"
+            else:
+                lammps_workload = "compute"
+
+            workload_config = get_lammps_workload(lammps_workload)
+            assert (
+                "data_file" in workload_config
+            ), "Workload config has no data file!"
+            data_file = get_lammps_data_file(workload_config["data_file"])[
+                "data"
+            ][0]
 
         # Record the start timestamp
         start_ts = 0
@@ -140,7 +305,12 @@ def thread_pool_thread(
 
                 mpirun_cmd = [
                     "mpirun",
-                    get_lammps_migration_params(native=True),
+                    get_lammps_migration_params(
+                        num_loops=workload_config["num_iterations"],
+                        num_net_loops=workload_config["num_net_loops"],
+                        chunk_size=workload_config["chunk_size"],
+                        native=True,
+                    ),
                     "-np {}".format(world_size),
                     # To improve OpenMPI performance, we tell it exactly where
                     # to run each rank. According to the MPI manual, to specify
@@ -161,13 +331,13 @@ def thread_pool_thread(
                     "su mpirun -c '{}'".format(mpirun_cmd),
                 ]
                 exec_cmd = " ".join(exec_cmd)
-            elif work_item.task.app == "omp":
-                # TODO(omp): should we set the parallelism level to be
-                # min(work_item.task.size, num_slots_per_vm) ? I.e. what will
-                # happen when we oversubscribe?
-                openmp_cmd = "bash -c '{} {}'".format(
-                    DGEMM_DOCKER_BINARY,
-                    get_dgemm_cmdline(work_item.task.size),
+            elif work_item.task.app in OPENMP_WORKLOADS:
+                openmp_cmd = "bash -c '{} {} {}'".format(
+                    get_elastic_input_data(native=True),
+                    OPENMP_ELASTIC_NATIVE_BINARY,
+                    get_openmp_kernel_cmdline(
+                        ELASTIC_KERNEL, work_item.task.size
+                    ),
                 )
 
                 exec_cmd = [
@@ -179,16 +349,28 @@ def thread_pool_thread(
                 exec_cmd = " ".join(exec_cmd)
 
             start_ts = time()
-            run_kubectl_cmd("makespan", exec_cmd)
+            try:
+                run_kubectl_cmd("makespan", exec_cmd)
+            except CalledProcessError:
+                has_failed = True
             actual_time = int(time() - start_ts)
-            thread_print("Actual time: {}".format(actual_time))
         else:
             # Prepare Faasm request
+            req = {}
+
             if work_item.task.app in MPI_WORKLOADS:
                 user = LAMMPS_FAASM_USER
                 func = LAMMPS_FAASM_MIGRATION_NET_FUNC
                 file_name = basename(data_file)
                 cmdline = "-in faasm://lammps-data/{}".format(file_name)
+
+                req["user"] = user
+                req["function"] = func
+                if get_workload_from_trace(trace_str) == "mpi-evict":
+                    req["subType"] = get_user_id_from_task(
+                        num_tasks_per_user, work_item.task.task_id
+                    )
+
                 msg = {
                     "user": user,
                     "function": func,
@@ -196,17 +378,24 @@ def thread_pool_thread(
                     "mpi": True,
                     "mpi_world_size": work_item.task.size,
                 }
+
                 # If attempting to migrate, add migration parameters
+                baselines_with_migration = (
+                    GRANNY_MIGRATE_BASELINES + GRANNY_FT_BASELINES
+                )
                 if work_item.task.app in MPI_MIGRATE_WORKLOADS:
                     check_every = (
                         1
-                        if baseline == "granny-migrate"
+                        if baseline in baselines_with_migration
                         else LAMMPS_SIM_NUM_ITERATIONS
                     )
                     msg["input_data"] = get_lammps_migration_params(
-                        check_every=check_every
+                        check_every=check_every,
+                        num_loops=workload_config["num_iterations"],
+                        num_net_loops=workload_config["num_net_loops"],
+                        chunk_size=workload_config["chunk_size"],
                     )
-            elif work_item.task.app == "omp":
+            elif work_item.task.app in OPENMP_WORKLOADS:
                 if work_item.task.size > num_cpus_per_vm:
                     print(
                         "Requested OpenMP execution with more parallelism"
@@ -214,40 +403,60 @@ def thread_pool_thread(
                         "{} > {}".format(work_item.task.size, num_cpus_per_vm)
                     )
                     raise RuntimeError("Error in OpenMP task trace!")
-                user = DGEMM_FAASM_USER
-                func = "{}_{}".format(DGEMM_FAASM_FUNC, work_item.task.task_id)
+                user = OPENMP_ELASTIC_USER
+                func = OPENMP_ELASTIC_FUNCTION
                 msg = {
                     "user": user,
                     "function": func,
-                    # The input_data is the number of OMP threads
-                    "cmdline": get_dgemm_cmdline(work_item.task.size),
+                    "input_data": get_elastic_input_data(),
+                    "cmdline": get_openmp_kernel_cmdline(
+                        ELASTIC_KERNEL, work_item.task.size
+                    ),
+                    "isOmp": True,
+                    "ompNumThreads": work_item.task.size,
                 }
 
-            start_ts = time()
-            # Post asynch request and wait for JSON result
-            try:
-                result_json = post_async_msg_and_get_result_json(msg)
-                actual_time = int(get_faasm_exec_time_from_json(result_json))
-                thread_print(
-                    "Finished executiong app {} (time: {})".format(
-                        result_json[0]["appId"], actual_time
-                    )
-                )
-            except RuntimeError:
-                actual_time = -1
-                sch_logger.error(
-                    "Error executing task {}".format(work_item.task.task_id)
-                )
+                req["user"] = user
+                req["function"] = func
+                req["singleHostHint"] = True
+                req["elasticScaleHint"] = baseline in GRANNY_ELASTIC_BASELINES
 
-        result_queue.put(
-            ResultQueueItem(
-                work_item.task.task_id,
-                actual_time,
-                start_ts,
-                time(),
-                master_vm_ip,
+            # Post asynch request and wait for JSON result
+            start_ts = time()
+            result_json = post_async_msg_and_get_result_json(msg, req_dict=req)
+            actual_time = int(get_faasm_exec_time_from_json(result_json))
+            has_failed = has_app_failed(result_json)
+            thread_print(
+                "Finished executiong app {} (time: {})".format(
+                    result_json[0]["appId"], actual_time
+                )
             )
-        )
+
+        end_ts = time()
+
+        if has_failed:
+            sch_logger.error(
+                "Error executing task {}".format(work_item.task.task_id)
+            )
+            result_queue.put(
+                ResultQueueItem(
+                    work_item.task.task_id,
+                    -1,
+                    -1,
+                    -1,
+                    master_vm_ip,
+                )
+            )
+        else:
+            result_queue.put(
+                ResultQueueItem(
+                    work_item.task.task_id,
+                    actual_time,
+                    start_ts,
+                    end_ts,
+                    master_vm_ip,
+                )
+            )
 
     thread_print("Pool thread {} shutting down".format(thread_idx))
 
@@ -261,10 +470,13 @@ class SchedulerState:
     # number of cpus per vm
     trace_str: str
     # The workload indicates the type of application we are runing. It can
-    # either be `omp` or `mpi`
+    # either be `omp-elastic` or `mpi-migrate` or `mpi-evict` or `mpi-spot`
     workload: str
     num_tasks: int
     num_cpus_per_vm: int
+    num_tasks_per_user: int
+    # Only for `mpi-spot`, number of faulty VMs
+    num_faults: int = 0
 
     # Total accounting of slots
     total_slots: int
@@ -292,13 +504,16 @@ class SchedulerState:
         baseline: str,
         num_tasks: int,
         num_vms: int,
+        num_tasks_per_user: int,
         trace_str: str,
     ):
         self.baseline = baseline
         self.num_tasks = num_tasks
         self.num_vms = num_vms
+        self.num_tasks_per_user = num_tasks_per_user
         self.trace_str = trace_str
         self.num_cpus_per_vm = get_num_cpus_per_vm_from_trace(trace_str)
+        self.workload = get_workload_from_trace(trace_str)
 
         # Work-out total number of slots
         self.total_slots = num_vms * self.num_cpus_per_vm
@@ -338,11 +553,42 @@ class SchedulerState:
         for ip, name in zip(vm_ips, vm_names):
             self.vm_map[ip] = self.num_cpus_per_vm
             self.vm_ip_to_name[ip] = name
+
             sch_logger.info(
                 "- IP: {} (name: {}) - Slots: {}".format(
                     ip, name, self.num_cpus_per_vm
                 )
             )
+
+    def update_vm_list(self):
+        if self.baseline not in NATIVE_BASELINES:
+            raise RuntimeError(
+                "This method should only be used in native baselines!"
+            )
+
+        wait_for_native_mpi_pods(
+            get_native_mpi_namespace("makespan"),
+            "run=faasm-openmpi",
+            num_expected=self.num_vms,
+            quiet=True,
+        )
+        vm_names, vm_ips = get_native_mpi_pods("makespan")
+
+        # First, delete the IPs that are not in the cluster anymore
+        ips_to_delete = []
+        for vm_ip in self.vm_map:
+            if vm_ip not in vm_ips:
+                ips_to_delete.append(vm_ip)
+
+        for vm_ip in ips_to_delete:
+            del self.vm_map[vm_ip]
+            del self.vm_ip_to_name[vm_ip]
+
+        # Second, add the new IPs
+        for vm_ip, vm_name in zip(vm_ips, vm_names):
+            if vm_ip not in self.vm_map:
+                self.vm_map[vm_ip] = self.num_cpus_per_vm
+                self.vm_ip_to_name[vm_ip] = vm_name
 
     def remove_in_flight_task(self, task_id: int) -> None:
         if task_id not in self.in_flight_tasks:
@@ -356,8 +602,26 @@ class SchedulerState:
             task_id
         ]
         for ip, slots in scheduling_decision:
-            self.vm_map[ip] += slots
+            if ip in self.vm_map:
+                self.vm_map[ip] += slots
+
             self.total_available_slots += slots
+
+        # Remove the task from in-flight
+        del self.in_flight_tasks[task_id]
+
+    def get_next_task(self, tasks):
+        for task in tasks:
+            if (
+                task.task_id in self.executed_task_info
+                and self.executed_task_info[task.task_id].time_executing == -1
+            ):
+                return task
+
+            if task.task_id not in self.executed_task_info:
+                return task
+
+        return None
 
     def print_executed_task_info(self, footer_text=None):
         """
@@ -439,32 +703,42 @@ class SchedulerState:
         Given a ResultQueueItem, update our records on executed tasks
         """
         self.remove_in_flight_task(result.task_id)
+
         if result.task_id not in self.executed_task_info:
             raise RuntimeError("Unrecognised task {}", result.task_id)
+
         self.executed_task_info[
             result.task_id
         ].time_executing = result.exec_time
         self.executed_task_info[result.task_id].exec_start_ts = result.start_ts
         self.executed_task_info[result.task_id].exec_end_ts = result.end_ts
-        self.executed_task_count += 1
 
-        # For reliability, also write a line to a file
-        # Note that we tag CSV files by the hardware we provision; i.e. the
-        # number of VMs and the number of cores per VM
-        write_line_to_csv(
-            self.baseline,
-            EXEC_TASK_INFO_FILE_PREFIX,
-            self.num_vms,
-            self.trace_str,
-            self.executed_task_info[result.task_id].task_id,
-            self.executed_task_info[result.task_id].time_executing,
-            self.executed_task_info[result.task_id].time_in_queue,
-            self.executed_task_info[result.task_id].exec_start_ts,
-            self.executed_task_info[result.task_id].exec_end_ts,
-        )
+        if not has_task_failed(result):
+            self.executed_task_count += 1
+
+            # For reliability, also write a line to a file
+            # Note that we tag CSV files by the hardware we provision; i.e. the
+            # number of VMs and the number of cores per VM
+            write_line_to_csv(
+                self.baseline,
+                EXEC_TASK_INFO_FILE_PREFIX,
+                self.num_vms,
+                self.num_tasks_per_user,
+                self.trace_str,
+                self.executed_task_info[result.task_id].task_id,
+                self.executed_task_info[result.task_id].time_executing,
+                self.executed_task_info[result.task_id].time_in_queue,
+                self.executed_task_info[result.task_id].exec_start_ts,
+                self.executed_task_info[result.task_id].exec_end_ts,
+            )
 
         # Lastly, print the executed task info for visualisation purposes
         self.print_executed_task_info()
+
+        # For native baselines that rely on this scheduler for the correct IP
+        # allocation, we need to update the list of IPs and VM map
+        if self.baseline in NATIVE_BASELINES:
+            self.update_vm_list()
 
 
 class BatchScheduler:
@@ -473,30 +747,35 @@ class BatchScheduler:
     thread_pool: List[Process]
     state: SchedulerState
     start_ts: float = 0.0
+    fault_injection_daemon: Process
 
     def __init__(
         self,
         baseline: str,
         num_tasks: int,
         num_vms: int,
+        num_tasks_per_user: int,
         trace_str: str,
     ):
         self.state = SchedulerState(
             baseline,
             num_tasks,
             num_vms,
+            num_tasks_per_user,
             trace_str,
         )
 
         print("Initialised batch scheduler with the following parameters:")
         print("\t- Baseline: {}".format(baseline))
+        print("\t- Workload: {}".format(self.state.workload))
         print("\t- Number of VMs: {}".format(self.state.num_vms))
         print("\t- Cores per VM: {}".format(self.state.num_cpus_per_vm))
 
         # We are pessimistic with the number of threads and allocate 2 times
         # the number of VMs, as the minimum world size we will ever use is half
-        # of a VM
-        self.num_threads_in_pool = int(2 * self.state.num_vms)
+        # of a VM. We use and additional thread to monitor the number of cross-
+        # VM links in our deployment
+        self.num_threads_in_pool = int(2 * self.state.num_vms + 1)
         self.thread_pool = [
             Process(
                 target=thread_pool_thread,
@@ -505,8 +784,10 @@ class BatchScheduler:
                     self.result_queue,
                     i,
                     baseline,
-                    self.state.vm_ip_to_name,
+                    self.state.num_vms,
                     self.state.num_cpus_per_vm,
+                    self.state.num_tasks_per_user,
+                    self.state.trace_str,
                 ),
             )
             for i in range(self.num_threads_in_pool)
@@ -520,6 +801,31 @@ class BatchScheduler:
         for thread in self.thread_pool:
             thread.start()
 
+        # Start the fault injection daemon for the appropriate workloads
+        if self.state.workload == "mpi-spot" and baseline in ALL_FT_BASELINES:
+            # How often we notify a host that it will be evicted
+            fault_injection_period_secs = 60
+            # What grace period do we give hosts after notifying their eviction
+            host_grace_period_secs = 60
+            # How many faults we are injecting
+            num_faults = int(num_vms / 4)
+            self.state.num_faults = num_faults
+
+            self.fault_injection_daemon = Process(
+                target=fault_injection_thread,
+                daemon=True,
+                args=(
+                    baseline,
+                    self.state.num_vms,
+                    fault_injection_period_secs,
+                    host_grace_period_secs,
+                    num_faults,
+                ),
+            )
+            self.fault_injection_daemon.start()
+
+            print("Initialised background fault-injection thread")
+
     def shutdown(self):
         shutdown_msg = WorkQueueItem(
             [(QUEUE_SHUTDOWN, -1)], TaskObject(-1, "-1", -1, -1)
@@ -532,10 +838,152 @@ class BatchScheduler:
 
     # --------- Actual scheduling and accounting -------
 
+    # In a multi-tenant setting, we want to _not_ consider for scheduling nodes
+    # that are already running tasks for different users
+    def prune_node_list_from_different_users(self, nodes, this_task):
+        this_task_id = get_user_id_from_task(
+            self.state.num_tasks_per_user, this_task.task_id
+        )
+
+        def get_indx_in_list(node_list, host_ip):
+            for idx, pair in enumerate(node_list):
+                if pair[0] == host_ip:
+                    return idx
+
+            return -1
+
+        for task_id in self.state.in_flight_tasks:
+            if (
+                get_user_id_from_task(self.state.num_tasks_per_user, task_id)
+                == this_task_id
+            ):
+                continue
+
+            sched_decision = self.state.in_flight_tasks[task_id]
+            for host_ip, num_msgs_in_host in sched_decision:
+                idx = get_indx_in_list(nodes, host_ip)
+                if idx != -1:
+                    del nodes[idx]
+
+        return nodes
+
+    def num_available_slots_from_vm_list(self, vm_list):
+        num_avail_slots = 0
+
+        for vm, num_slots in vm_list:
+            num_avail_slots += num_slots
+
+        return num_avail_slots
+
+    # Helper method to know if we have enough slots to schedule a task
+    def have_enough_slots_for_task(self, task: TaskObject):
+        if self.state.baseline in NATIVE_BASELINES:
+            if self.state.workload == "mpi-evict":
+                # For `mpi-evict` we run a multi-tenant trace, and prevent apps
+                # from different users from running in the same VM
+                sorted_vms = sorted(
+                    self.state.vm_map.items(),
+                    key=lambda item: item[1],
+                    reverse=True,
+                )
+
+                pruned_vms = self.prune_node_list_from_different_users(
+                    sorted_vms, task
+                )
+
+                return (
+                    self.num_available_slots_from_vm_list(pruned_vms)
+                    >= task.size
+                )
+            elif self.state.workload in OPENMP_WORKLOADS:
+                # For OpenMP workloads, we can only allocate them in one VM, so
+                # we compare the requested size with the largest capacity we
+                # have in one VM
+                sorted_vms = sorted(
+                    self.state.vm_map.items(),
+                    key=lambda item: item[1],
+                    reverse=True,
+                )
+
+                return sorted_vms[0][1] >= task.size
+            else:
+                return self.state.total_available_slots >= task.size
+        else:
+            # For Granny, we can always rely on the planner to let us know
+            # how many slots we can use
+            if self.state.workload == "mpi-evict":
+                return (
+                    get_num_available_slots_from_in_flight_apps(
+                        self.state.num_vms,
+                        self.state.num_cpus_per_vm,
+                        user_id=get_user_id_from_task(
+                            self.state.num_tasks_per_user, task.task_id
+                        ),
+                    )
+                    >= task.size
+                )
+
+            if (
+                self.state.workload == "mpi-spot"
+                and self.state.baseline in GRANNY_FT_BASELINES
+            ):
+                return (
+                    get_num_available_slots_from_in_flight_apps(
+                        self.state.num_vms,
+                        self.state.num_cpus_per_vm,
+                        num_evicted_vms=self.state.num_faults,
+                    )
+                    >= task.size
+                )
+
+            if (
+                self.state.workload == "mpi-locality"
+                and self.state.baseline in GRANNY_MIGRATE_BASELINES
+            ):
+                return (
+                    get_num_available_slots_from_in_flight_apps(
+                        self.state.num_vms,
+                        self.state.num_cpus_per_vm,
+                        next_task_size=task.size,
+                    )
+                    >= task.size
+                )
+
+            if (
+                self.state.workload == "mpi-locality"
+                and self.state.baseline in GRANNY_BATCH_BASELINES
+            ):
+                return (
+                    get_num_available_slots_from_in_flight_apps(
+                        self.state.num_vms,
+                        self.state.num_cpus_per_vm,
+                        next_task_size=task.size,
+                        batch=True,
+                    )
+                    >= task.size
+                )
+
+            if self.state.workload in OPENMP_WORKLOADS:
+                return (
+                    get_num_available_slots_from_in_flight_apps(
+                        self.state.num_vms,
+                        self.state.num_cpus_per_vm,
+                        openmp=True,
+                    )
+                    >= task.size
+                )
+
+            return (
+                get_num_available_slots_from_in_flight_apps(
+                    self.state.num_vms, self.state.num_cpus_per_vm
+                )
+                >= task.size
+            )
+
     def schedule_task_to_vm(
         self, task: TaskObject
     ) -> Union[str, List[Tuple[str, int]]]:
-        if self.state.total_available_slots < task.size:
+        if not self.have_enough_slots_for_task(task):
             sch_logger.info(
                 "Not enough slots to schedule task "
                 "{}-{} (needed: {} - have: {})".format(
@@ -545,6 +993,7 @@ class BatchScheduler:
                     int(self.state.total_available_slots),
                 )
             )
+
             return NOT_ENOUGH_SLOTS
 
         # A scheduling decision is a list of (ip, slots) pairs inidicating
@@ -558,8 +1007,18 @@ class BatchScheduler:
         sorted_vms = sorted(
             self.state.vm_map.items(), key=lambda item: item[1], reverse=True
         )
-        # TODO(omp): why should it be any different with OpenMP?
-        if task.app in MPI_WORKLOADS:
+
+        if self.state.workload == "mpi-evict":
+            sorted_vms = self.prune_node_list_from_different_users(
+                sorted_vms, task
+            )
+
+        if self.state.workload in OPENMP_WORKLOADS:
+            sorted_vms = [sorted_vms[0]]
+
+        # For GRANNY baselines we can skip the python-side accounting as the
+        # planner has all the scheduling information
+        if self.state.baseline in NATIVE_BASELINES:
             for vm, num_slots in sorted_vms:
                 # Work out how many slots can we take up in this pod
                 if self.state.baseline == "batch":
@@ -593,36 +1052,6 @@ class BatchScheduler:
                 raise RuntimeError(
                     "Scheduling error: inconsistent scheduler state"
                 )
-        """
-        elif task.app == "omp":
-            if len(sorted_vms) == 0:
-                # TODO: maybe we should raise an inconsistent state error here
-                return NOT_ENOUGH_SLOTS
-            vm, num_slots = sorted_vms[0]
-            if num_slots == 0:
-                # TODO: maybe we should raise an inconsistent state error here
-                return NOT_ENOUGH_SLOTS
-            if self.state.baseline in NATIVE_BASELINES:
-                if task.size > self.state.num_cpus_per_vm:
-                    print(
-                        "Overcomitting for task {} ({} > {})".format(
-                            task.task_id,
-                            task.size,
-                            self.state.num_cpus_per_vm,
-                        )
-                    )
-                num_on_this_vm = self.state.num_cpus_per_vm
-            else:
-                if num_slots < task.size:
-                    return NOT_ENOUGH_SLOTS
-                num_on_this_vm = task.size
-
-            scheduling_decision.append((vm, num_on_this_vm))
-            self.state.vm_map[vm] -= num_on_this_vm
-            # TODO: when we overcommit, do we substract the number of cores
-            # we occupy, or the ones we agree to run?
-            self.state.total_available_slots -= num_on_this_vm
-        """
 
         # Before returning, persist the scheduling decision to state
         self.state.in_flight_tasks[task.task_id] = scheduling_decision
@@ -635,30 +1064,105 @@ class BatchScheduler:
         """
         Execute a list of tasks, and return details on the task execution
         """
-        # If running a WASM workload, flush the hosts first
-        if self.state.baseline in GRANNY_BASELINES:
-            flush_workers()
-
         # Mark the initial timestamp
         self.start_ts = time()
 
-        for t_num, t in enumerate(tasks):
-            sch_logger.debug(
-                "Sleeping {} seconds between tasks".format(INTERTASK_SLEEP)
-            )
-            sleep(INTERTASK_SLEEP)
-            sch_logger.debug("Done sleeping")
+        # def do_execute_tasks(this_tasks):
 
-            # Try to schedule the task with the current available
-            # resources
-            scheduling_decision = self.schedule_task_to_vm(t)
+        # We loop through all the tasks in a while loop to make sure that we
+        # re-start tasks that have failed
+        while True:
+            # for t_num, t in enumerate(this_tasks):
+            t = self.state.get_next_task(tasks)
 
-            # If we don't have enough resources, wait for results until enough
-            # resources, or autoscale if allowed to do so
-            time_in_queue_start = time()
-            while scheduling_decision == NOT_ENOUGH_SLOTS:
-                result: ResultQueueItem
+            while t is not None:
+                sch_logger.debug(
+                    "Sleeping {} seconds between tasks".format(INTERTASK_SLEEP)
+                )
+                sleep(INTERTASK_SLEEP)
+                sch_logger.debug("Done sleeping")
 
+                # Try to schedule the task with the current available
+                # resources
+                scheduling_decision = self.schedule_task_to_vm(t)
+
+                # If we don't have enough resources, wait for results until enough
+                # resources
+                time_in_queue_start = time()
+                while scheduling_decision == NOT_ENOUGH_SLOTS:
+                    result: ResultQueueItem
+
+                    # In the MPI evict baseline we want to query often about being
+                    # able to schedule, as some planner migrations may unblock
+                    # scheduling
+                    if (
+                        self.state.workload == "mpi-evict"
+                        and self.state.baseline in GRANNY_BASELINES
+                    ):
+                        # If there are not enough slots, first try to deque
+                        try:
+                            result = dequeue_with_timeout(
+                                self.result_queue,
+                                "result queue",
+                                throw=True,
+                                timeout_s=1,
+                            )
+
+                            # If dequeue works, update records and try to
+                            # schedule again
+                            self.state.update_records_from_result(result)
+                        except Queue_Empty:
+                            # If dequeue does not work (it times out) try to
+                            # schedule again anyway
+                            pass
+
+                        scheduling_decision = self.schedule_task_to_vm(t)
+                    else:
+                        result = dequeue_with_timeout(
+                            self.result_queue, "result queue"
+                        )
+
+                        # Update our local records according to result
+                        self.state.update_records_from_result(result)
+
+                        # Try to schedule again
+                        scheduling_decision = self.schedule_task_to_vm(t)
+
+                # Once we have been able to schedule the task, record the time it
+                # took, i.e. the time the task spent in the queue
+                time_in_queue = int(time() - time_in_queue_start)
+                self.state.executed_task_info[t.task_id] = ExecutedTaskInfo(
+                    t.task_id, 0, time_in_queue, 0, 0
+                )
+
+                # Log the scheduling decision to a file
+                if self.state.baseline in NATIVE_BASELINES:
+                    write_line_to_csv(
+                        self.state.baseline,
+                        SCHEDULING_INFO_FILE_PREFIX,
+                        self.state.num_vms,
+                        self.state.num_tasks_per_user,
+                        self.state.trace_str,
+                        t.task_id,
+                        scheduling_decision,
+                    )
+
+                # Lastly, put the scheduled task in the work queue
+                self.work_queue.put(WorkQueueItem(scheduling_decision, t))
+
+                t = self.state.get_next_task(tasks)
+
+                # Before printing the executed task info, update the next task
+                # (so that it is not anymore the current one)
+                if t is not None:
+                    self.state.next_task_in_queue = t
+                self.state.print_executed_task_info()
+
+            # Once we are done scheduling tasks, drain the result queue (no more
+            # tasks are next in queue). If any of the dequeued tasks fails,
+            # we will go back to the beginning
+            self.state.next_task_in_queue = None
+            while self.state.executed_task_count < len(tasks):
                 result = dequeue_with_timeout(
                     self.result_queue, "result queue"
                 )
@@ -666,51 +1170,13 @@ class BatchScheduler:
                 # Update our local records according to result
                 self.state.update_records_from_result(result)
 
-                # Try to schedule again
-                scheduling_decision = self.schedule_task_to_vm(t)
+                # If the task has failed, make sure we try to run it again
+                if has_task_failed(result):
+                    break
 
-            # Once we have been able to schedule the task, record the time it
-            # took, i.e. the time the task spent in the queue
-            time_in_queue = int(time() - time_in_queue_start)
-            self.state.executed_task_info[t.task_id] = ExecutedTaskInfo(
-                t.task_id, 0, time_in_queue, 0, 0
-            )
-
-            # Before printing the executed task info, update the next task
-            # (so that it is not anymore the current one)
-            if t_num < len(tasks) - 1:
-                self.state.next_task_in_queue = tasks[t_num + 1]
-            self.state.print_executed_task_info()
-
-            # Log the scheduling decision
-            master_vm = scheduling_decision[0][0]
-            sch_logger.debug(
-                "Scheduling work task "
-                "{} ({} slots) with master VM {}".format(
-                    t.task_id, t.size, master_vm
-                )
-            )
-            # Log the scheduling decision to a file
-            write_line_to_csv(
-                self.state.baseline,
-                SCHEDULINNG_INFO_FILE_PREFIX,
-                self.state.num_vms,
-                self.state.trace_str,
-                t.task_id,
-                scheduling_decision,
-            )
-
-            # Lastly, put the scheduled task in the work queue
-            self.work_queue.put(WorkQueueItem(scheduling_decision, t))
-
-        # Once we are done scheduling tasks, drain the result queue (no more
-        # tasks are next in queue)
-        self.state.next_task_in_queue = None
-        while self.state.executed_task_count < len(tasks):
-            result = dequeue_with_timeout(self.result_queue, "result queue")
-
-            # Update our local records according to result
-            self.state.update_records_from_result(result)
+            # Finally, break out of the main loop if we are indeed done
+            if self.state.executed_task_count == len(tasks):
+                break
 
         return self.state.executed_task_info
 

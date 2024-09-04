@@ -15,7 +15,7 @@ from tasks.util.lammps import (
     LAMMPS_RESULTS_DIR,
     LAMMPS_SIM_WORKLOAD,
     LAMMPS_SIM_WORKLOAD_CONFIGS,
-    get_faasm_benchmark,
+    get_lammps_data_file,
     get_lammps_migration_params,
 )
 from tasks.util.openmpi import (
@@ -50,7 +50,6 @@ def wasm(ctx, w, repeats=1):
     """
     num_vms = len(get_faasm_worker_ips())
     assert num_vms == 2, "Expected 2 VMs got: {}!".format(num_vms)
-    data_file = basename(get_faasm_benchmark(LAMMPS_SIM_WORKLOAD)["data"][0])
 
     for workload in w:
         if workload not in LAMMPS_SIM_WORKLOAD_CONFIGS:
@@ -60,6 +59,9 @@ def wasm(ctx, w, repeats=1):
                 )
             )
         workload_config = LAMMPS_SIM_WORKLOAD_CONFIGS[workload]
+        data_file = basename(
+            get_lammps_data_file(workload_config["data-file"])["data"][0]
+        )
 
         csv_name = "lammps_granny_{}.csv".format(workload)
         _init_csv_file(csv_name)
@@ -83,6 +85,7 @@ def wasm(ctx, w, repeats=1):
                     "cmdline": cmdline,
                     "mpi_world_size": int(nproc),
                     "input_data": get_lammps_migration_params(
+                        num_loops=3,
                         num_net_loops=workload_config["num_net_loops"],
                         chunk_size=workload_config["chunk_size"],
                     ),
@@ -108,6 +111,9 @@ def native(ctx, w, repeats=1):
                 )
             )
         workload_config = LAMMPS_SIM_WORKLOAD_CONFIGS[workload]
+        data_file = get_lammps_data_file(workload_config["data-file"])["data"][
+            0
+        ]
 
         pod_names, pod_ips = get_native_mpi_pods("lammps")
         assert (
@@ -121,7 +127,7 @@ def native(ctx, w, repeats=1):
 
         native_cmdline = "-in {}/{}.faasm.native".format(
             LAMMPS_MIGRATION_NET_DOCKER_DIR,
-            get_faasm_benchmark(LAMMPS_SIM_WORKLOAD)["data"][0],
+            data_file,
         )
 
         for nproc in NPROCS_EXPERIMENT:
@@ -146,6 +152,7 @@ def native(ctx, w, repeats=1):
                     "mpirun",
                     get_lammps_migration_params(
                         native=True,
+                        num_loops=3,
                         num_net_loops=workload_config["num_net_loops"],
                         chunk_size=workload_config["chunk_size"],
                     ),

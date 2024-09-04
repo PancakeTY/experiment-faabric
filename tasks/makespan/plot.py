@@ -1,303 +1,474 @@
-from glob import glob
 from invoke import task
-from numpy import arange
-from os import makedirs
-from os.path import join
-from tasks.makespan.util import (
-    get_num_cpus_per_vm_from_trace,
-    get_trace_ending,
-    get_trace_from_parameters,
+from matplotlib.patches import Patch
+from matplotlib.pyplot import subplots, subplot_mosaic
+from tasks.util.elastic import (
+    plot_elastic_results,
+    read_elastic_results,
 )
-from tasks.util.env import MPL_STYLE_FILE, PLOTS_FORMAT, PLOTS_ROOT, PROJ_ROOT
-from tasks.util.plot import PLOT_COLORS, PLOT_LABELS, PLOT_PATTERNS
+from tasks.util.eviction import (
+    read_eviction_results,
+    plot_eviction_results,
+)
 
-import matplotlib.patches as mpatches
-import matplotlib.pyplot as plt
-import pandas as pd
-
-RESULTS_DIR = join(PROJ_ROOT, "results", "makespan")
-PLOTS_DIR = join(PLOTS_ROOT, "makespan")
-OUT_FILE_TIQ = join(PLOTS_DIR, "time_in_queue.{}".format(PLOTS_FORMAT))
-WORKLOAD_TO_LABEL = {
-    "wasm": "Granny",
-    "batch": "Batch (1 usr)",
-    "batch2": "Batch (2 usr)",
-}
-
-
-def _read_results(plot, workload, backend, num_vms, trace):
-    result_dict = {}
-
-    if plot == "idle-cores":
-        glob_str = "makespan_idle-cores_*_{}_{}_{}".format(
-            backend, num_vms, get_trace_ending(trace)
-        )
-        for csv in glob(join(RESULTS_DIR, glob_str)):
-            workload = csv.split("_")[2]
-            results = pd.read_csv(csv)
-            result_dict[workload] = results["NumIdleCores"].to_list()
-    elif plot == "exec-time":
-        trace_ending = trace[6:]
-        glob_str = "makespan_exec-task-info_*_{}_{}_{}".format(
-            backend, num_vms, trace_ending
-        )
-        for csv in glob(join(RESULTS_DIR, glob_str)):
-            workload = csv.split("_")[2]
-            results = pd.read_csv(csv)
-            result_dict[workload] = {}
-            result_dict[workload]["makespan"] = (
-                results.max()["EndTimeStamp"] - results.min()["StartTimeStamp"]
-            )
-            result_dict[workload]["exec-time"] = results[
-                "TimeExecuting"
-            ].to_list()
-            result_dict[workload]["service-time"] = (
-                results["TimeExecuting"] + results["TimeInQueue"]
-            ).to_list()
-
-    return result_dict
+# TODO: consider moving some of the migration to a different file (e.g.
+# tasks.util.locality)
+from tasks.util.makespan import MAKESPAN_PLOTS_DIR
+from tasks.util.locality import (
+    plot_locality_results,
+    read_locality_results,
+)
+from tasks.util.plot import (
+    DOUBLE_COL_FIGSIZE_HALF,
+    DOUBLE_COL_FIGSIZE_THIRD,
+    get_color_for_baseline,
+    get_label_for_baseline,
+    save_plot,
+)
+from tasks.util.spot import (
+    plot_spot_results,
+    read_spot_results,
+)
 
 
-@task(default=True)
-def saturation(
-    ctx, backend="k8s", num_vms=32, num_tasks=100, num_cores_per_vm=8
-):
+# TODO: delete me if miracle happens
+@task
+def migration(ctx):
     """
-    Plot the makespan, number of idle cores over time, and execution time
-    when the cluster is saturated
+    Macrobenchmark plot showing the benefits of migrating MPI applications to
+    improve locality of execution. We show:
+    - LHS: both number of cross-VM links and number of idle cpu cores per exec
+    - RHS: timeseries of one of the points in the plot
     """
-    mpi_trace = get_trace_from_parameters("mpi", num_tasks, num_cores_per_vm)
-    omp_trace = get_trace_from_parameters("omp", num_tasks, num_cores_per_vm)
-    num_vms = int(num_vms)
-    makedirs(PLOTS_DIR, exist_ok=True)
-    plt.style.use(MPL_STYLE_FILE)
+    num_vms = [8, 16, 24, 32]
+    num_tasks = [50, 100, 150, 200]
+    num_cpus_per_vm = 8
 
-    # Plot one row of plots for MPI, and one for OpenMP, and one for mix
-    _plot_row("mpi", backend, num_vms, mpi_trace)
-    _plot_row("omp", backend, num_vms, omp_trace)
+    # RHS: zoom in one of the bars
+    timeseries_num_vms = num_vms[-1]
 
-
-def _plot_row(workload_in, backend, num_vms, trace):
-    """
-    Plot one of the rows for each workload: `mpi` or `omp`
-    """
-    out_file_name = "idle-cores_{}_{}_{}_{}.pdf".format(
-        workload_in, backend, num_vms, trace[10:-4]
-    )
-    fig, (ax1, ax2, ax3) = plt.subplots(nrows=1, ncols=3, figsize=(12, 2))
-
-    # First plot: breakdown of makespans
-    result_dict_et = _read_results(
-        "exec-time", workload_in, backend, num_vms, trace
-    )
-    num_workloads = len(result_dict_et)
-    width = 0.5
-    xs = arange(num_workloads)
-    labels = list(result_dict_et.keys())
-    labels.sort()
-    ys = [result_dict_et[la]["makespan"] for la in labels]
-    bars = ax1.bar(xs, ys, width)
-    for bar, key in zip(bars, labels):
-        bar.set_label(PLOT_LABELS[key])
-        bar.set_color(PLOT_COLORS[key])
-        bar.set_hatch(PLOT_PATTERNS[labels.index(key)])
-        bar.set_edgecolor("black")
-    ax1.set_ylim(bottom=0)
-    ax1.set_ylabel("Makespan [s]")
-    ax1.set_xticks(xs)
-    ax1.set_xticklabels(
-        [PLOT_LABELS[_l] for _l in labels], rotation=25, ha="right"
-    )
-
-    # Second plot: CDF of idle cores
-    result_dict_ic = _read_results(
-        "idle-cores", workload_in, backend, num_vms, trace
-    )
-    total_num_cores = num_vms * get_num_cpus_per_vm_from_trace(trace)
-    nbins = 100
-    for workload in result_dict_ic:
-        xs = [
-            int(ic / total_num_cores * 100) for ic in result_dict_ic[workload]
-        ]
-        bars = ax2.hist(
-            xs,
-            nbins,
-            color=PLOT_COLORS[workload],
-            histtype="step",
-            density=True,
-            cumulative=True,
-        )
-    ax2.set_xlim(left=0, right=100)
-    ax2.set_ylim(bottom=0, top=1)
-    ax2.set_ylabel("CDF [%]")
-    ax2.set_xlabel("Percentage of idle vCPUs [%]")
-
-    # Third plot: CDF of execution time and normalised (?) service time
-    for workload in result_dict_et:
-        xs = result_dict_et[workload]["exec-time"]
-        ax3.hist(
-            xs,
-            nbins,
-            color=PLOT_COLORS[workload],
-            histtype="step",
-            density=True,
-            cumulative=True,
-        )
-    ax3.set_xlim(left=0)
-    ax3.set_ylim(bottom=0, top=1)
-    ax3.set_ylabel("CDF [%]")
-    ax3.set_xlabel("Execution Time [s]")
-
-    # Finally, save the figure
-    fig.tight_layout()
-    plt.savefig(
-        join(PLOTS_DIR, out_file_name), format="pdf", bbox_inches="tight"
-    )
-    print("Plot saved to: {}".format(join(PLOTS_DIR, out_file_name)))
-
-
-@task()
-def mods(ctx, backend="k8s", num_vms=32, num_tasks=100, num_cores_per_vm=8):
-    """
-    # Second figure: MPI with migration, and OpenMP with consolidation
-    out_file_name = "mods_{}_{}_{}.pdf".format(
-        backend, num_vms, mpi_trace[10:-4]
-    )
-    fig, (ax_row1, ax_row2) = plt.subplots(
-        nrows=2, ncols=3, figsize=(12, 8)
-    )
-    _plot_row(ax_row1, "mpi-migrate", backend, num_vms, mpi_migrate_trace)
-    # TODO: make this OpenMP consolidate instead
-    _plot_row(ax_row2, "mpi-migrate", backend, num_vms, mpi_migrate_trace)
-    fig.tight_layout()
-    plt.savefig(
-        join(PLOTS_DIR, out_file_name), format="pdf", bbox_inches="tight"
-    )
-    print("Plot saved to: {}".format(join(PLOTS_DIR, out_file_name)))
-    """
-    pass
-
-
-@task(default=False)
-def scaling(
-    ctx, backend="k8s", num_vms=None, num_tasks=None, num_cores_per_vm=8
-):
-    if not num_vms:
-        num_vms = [16, 32, 64, 128]
-    else:
-        num_vms = [int(num_vms)]
-    if not num_tasks:
-        num_tasks = [50, 100, 200, 400]
-    else:
-        num_tasks = [int(num_tasks)]
-
-    if len(num_tasks) != len(num_vms):
-        raise RuntimeError(
-            "Lengths differ! {} != {}".format(len(num_tasks), len(num_vms))
+    results = {}
+    for (n_vms, n_tasks) in zip(num_vms, num_tasks):
+        results[n_vms] = read_locality_results(
+            n_vms, n_tasks, num_cpus_per_vm, migrate=True
         )
 
-    traces = []
-    for tasks in num_tasks:
-        traces.append(
-            get_trace_from_parameters("mpi", tasks, num_cores_per_vm)
+    # ----------
+    # Plot 1: aggregate idle vCPUs
+    # ----------
+
+    fig, ax = subplots(figsize=DOUBLE_COL_FIGSIZE_THIRD)
+
+    plot_locality_results(
+        "percentage_vcpus",
+        results,
+        ax,
+        num_vms=num_vms,
+        num_tasks=num_tasks,
+        migrate=True,
+    )
+
+    # Manually craft the legend
+    baselines = ["slurm", "batch", "granny", "granny-migrate"]
+    legend_entries = [
+        Patch(
+            color=get_color_for_baseline("mpi-migrate", baseline),
+            label=get_label_for_baseline("mpi-migrate", baseline),
         )
-
-    makedirs(PLOTS_DIR, exist_ok=True)
-    plt.style.use(MPL_STYLE_FILE)
-
-    result_dict_et = {}
-    for num_vm, trace in zip(num_vms, traces):
-        result_dict_et[num_vm] = _read_results(
-            "exec-time", "mpi", backend, num_vm, trace
-        )
-
-    makespans = {}
-    exec_times = {}
-    labels = list(PLOT_LABELS.keys())
-    labels.sort()
-    for label in labels:
-        for num_vm in num_vms:
-            if label not in makespans:
-                makespans[label] = []
-                exec_times[label] = []
-            makespans[label].append(result_dict_et[num_vm][label]["makespan"])
-            exec_times[label].append(
-                result_dict_et[num_vm][label]["exec-time"]
-            )
-
-    # First plot: bar plot of makespans
-    out_file_name = "scaling_{}_makespan.pdf".format(backend)
-    fig, ax = plt.subplots(figsize=(4, 3))
-    width = 0.15
-    xs = arange(len(num_vms))
-    for ind, label in enumerate(labels):
-        ax.bar(
-            xs - width * 2 + width * ind,
-            makespans[label],
-            width,
-            label=PLOT_LABELS[label],
-            color=PLOT_COLORS[label],
-            hatch=PLOT_PATTERNS[ind],
-            edgecolor="black",
-        )
-    ax.set_ylabel("Makespan [s]", fontsize=12)
-    xlabels = [
-        "{} VMs\n{} jobs".format(num_vm, ntasks)
-        for num_vm, ntasks in zip(num_vms, num_tasks)
+        for baseline in baselines
     ]
-    ax.set_xticks(xs)
-    ax.set_xticklabels(xlabels, rotation=25, ha="center", fontsize=12)
-    ax.set_ylim(bottom=0)
-    fig.tight_layout()
-    plt.savefig(
-        join(PLOTS_DIR, out_file_name), format="pdf", bbox_inches="tight"
+    fig.legend(
+        handles=legend_entries,
+        loc="upper center",
+        ncols=2,
+        bbox_to_anchor=(0.535, 0.3),
     )
-    print("Plot saved to: {}".format(join(PLOTS_DIR, out_file_name)))
 
-    # Second plot: box plot of execution times
-    out_file_name = "scaling_{}_exec_time.pdf".format(backend)
-    fig, ax = plt.subplots(figsize=(4, 3))
-    legend_handles = []
-    for ind, label in enumerate(labels):
-        bplot = ax.boxplot(
-            exec_times[label],
-            positions=[x - width * 2 + width * ind for x in xs],
-            widths=width,
-            patch_artist=True,
-            flierprops=dict(
-                marker=".",
-                markerfacecolor=PLOT_COLORS[label],
-                markersize=1,
-                linestyle="none",
-                markeredgecolor=PLOT_COLORS[label],
-            ),
-            boxprops=dict(linewidth=0),
-            medianprops=dict(color="black", linewidth=1),
-            whiskerprops=dict(linewidth=1),
-            showfliers=False,
-            vert=True,
-        )
-        for box in bplot["boxes"]:
-            box.set_facecolor(PLOT_COLORS[label])
-            box.set_hatch(PLOT_PATTERNS[labels.index(label)])
-        legend_handles.append(
-            mpatches.Patch(
-                facecolor=PLOT_COLORS[label],
-                hatch=PLOT_PATTERNS[ind],
-                edgecolor="black",
-                lw=1,
-                label=label,
-            )
-        )
-    ax.legend(
-        handles=legend_handles, loc="upper left", ncol=2, prop={"size": 12}
+    save_plot(fig, MAKESPAN_PLOTS_DIR, "makespan_migrate_vcpus")
+
+    # ----------
+    # Plot 1: aggregate xVM links
+    # ----------
+
+    fig, ax = subplots(figsize=DOUBLE_COL_FIGSIZE_THIRD)
+
+    plot_locality_results(
+        "percentage_xvm",
+        results,
+        ax,
+        num_vms=num_vms,
+        num_tasks=num_tasks,
+        migrate=True,
     )
-    ax.set_ylim(bottom=0, top=300)
-    ax.set_xticks(xs)
-    ax.set_xticklabels(xlabels, rotation=25, ha="center", fontsize=12)
-    ax.set_ylabel("Execution time [s]", fontsize=12)
-    fig.tight_layout()
-    plt.savefig(
-        join(PLOTS_DIR, out_file_name), format="pdf", bbox_inches="tight"
+
+    save_plot(fig, MAKESPAN_PLOTS_DIR, "makespan_migrate_xvm")
+
+    # ----------
+    # Plot 3: timeseries of vCPUs
+    # ----------
+
+    fig, ax = subplots(figsize=DOUBLE_COL_FIGSIZE_THIRD)
+
+    plot_locality_results(
+        "ts_vcpus", results, ax, num_vms=timeseries_num_vms, migrate=True
     )
-    print("Plot saved to: {}".format(join(PLOTS_DIR, out_file_name)))
+
+    save_plot(fig, MAKESPAN_PLOTS_DIR, "makespan_migrate_ts_vcpus")
+
+    # ----------
+    # Plot 4: timeseries of xVM links
+    # ----------
+
+    fig, ax = subplots(figsize=DOUBLE_COL_FIGSIZE_THIRD)
+
+    plot_locality_results(
+        "ts_xvm_links", results, ax, num_vms=timeseries_num_vms, migrate=True
+    )
+
+    save_plot(fig, MAKESPAN_PLOTS_DIR, "makespan_migrate_ts_xvm")
+
+
+@task
+def locality(ctx):
+    """
+    Macrobenchmark plot showing the benefits of migrating MPI applications to
+    improve locality of execution. We show:
+    - LHS: both number of cross-VM links and number of idle cpu cores per exec
+    - RHS: timeseries of one of the points in the plot
+    """
+    # num_vms = [8, 16, 24, 32]
+    # num_tasks = [50, 100, 150, 200]
+    # num_vms = [4, 8]
+    # num_tasks = [10, 50]
+    # num_vms = [8]
+    # num_tasks = [50]
+    num_vms = [8, 16, 24, 32]
+    num_tasks = [25, 50, 75, 100]
+    num_cpus_per_vm = 8
+
+    # RHS: zoom in one of the bars
+    timeseries_num_vms = num_vms[-1]
+    timeseries_num_tasks = num_tasks[-1]
+
+    results = {}
+    for (n_vms, n_tasks) in zip(num_vms, num_tasks):
+        results[n_vms] = read_locality_results(n_vms, n_tasks, num_cpus_per_vm)
+
+    # ----------
+    # Plot 1: makespan bar plot
+    # ----------
+
+    fig, ax = subplots(figsize=DOUBLE_COL_FIGSIZE_THIRD)
+
+    plot_locality_results(
+        "makespan", results, ax, num_vms=num_vms, num_tasks=num_tasks
+    )
+
+    save_plot(fig, MAKESPAN_PLOTS_DIR, "makespan_locality_makespan")
+
+    # ----------
+    # Plot 2: Aggregate vCPUs metric
+    # ----------
+
+    fig, ax = subplots(figsize=DOUBLE_COL_FIGSIZE_THIRD)
+
+    plot_locality_results(
+        "percentage_vcpus", results, ax, num_vms=num_vms, num_tasks=num_tasks
+    )
+
+    # ----------
+    # Plot 3: Aggregate xVM metric
+    # ----------
+
+    fig, ax = subplots(figsize=DOUBLE_COL_FIGSIZE_THIRD)
+
+    plot_locality_results(
+        "percentage_xvm", results, ax, num_vms=num_vms, num_tasks=num_tasks
+    )
+
+    save_plot(fig, MAKESPAN_PLOTS_DIR, "makespan_locality_xvm")
+
+    # ----------
+    # Plot 4: execution time CDF
+    # ----------
+
+    fig, ax = subplots(figsize=DOUBLE_COL_FIGSIZE_THIRD)
+
+    plot_locality_results(
+        "cdf_jct",
+        results,
+        ax,
+        cdf_num_vms=timeseries_num_vms,
+        cdf_num_tasks=timeseries_num_tasks,
+    )
+
+    # Manually craft the legend
+    baselines = ["granny-batch", "granny", "granny-migrate"]
+    legend_entries = [
+        Patch(
+            color=get_color_for_baseline("mpi-locality", baseline),
+            label=get_label_for_baseline("mpi-locality", baseline),
+        )
+        for baseline in baselines
+    ]
+    fig.legend(
+        handles=legend_entries,
+        loc="lower center",
+        ncols=2,
+        bbox_to_anchor=(0.65, 0.17),
+    )
+
+    save_plot(fig, MAKESPAN_PLOTS_DIR, "makespan_locality_vcpus")
+
+    save_plot(fig, MAKESPAN_PLOTS_DIR, "makespan_locality_cdf_jct")
+
+    # ----------
+    # Plot 5: time-series of idle vCPUs
+    # ----------
+
+    fig, ax = subplots(figsize=DOUBLE_COL_FIGSIZE_THIRD)
+
+    plot_locality_results("ts_vcpus", results, ax, num_vms=timeseries_num_vms)
+
+    save_plot(fig, MAKESPAN_PLOTS_DIR, "makespan_locality_ts_vcpus")
+
+    # ----------
+    # Plot 5: time-series of cross-VM links
+    # ----------
+
+    fig, ax = subplots(figsize=DOUBLE_COL_FIGSIZE_THIRD)
+
+    plot_locality_results(
+        "ts_xvm_links", results, ax, num_vms=timeseries_num_vms
+    )
+
+    save_plot(fig, MAKESPAN_PLOTS_DIR, "makespan_locality_ts_xvm")
+
+
+@task
+def eviction(ctx):
+    """
+    Macrobenchmark plot showing the benefits of migrating MPI applications to
+    evict idle VMs.
+    - LHS: Bar plot of the VMseconds used per execution (makespan)
+    - RHS: timeseries of the number of active jobs per user
+    """
+    # num_vms = [8, 16, 32]
+    # num_tasks = [50, 100, 200]
+    num_vms = [8, 16]
+    num_tasks = [50, 100]
+    num_users = [10, 10]
+    num_cpus_per_vm = 8
+
+    # RHS: zoom in one of the bars
+    timeseries_num_vms = 8
+    timeseries_num_users = 10
+
+    results = {}
+    for (n_vms, n_users, n_tasks) in zip(num_vms, num_users, num_tasks):
+        results[n_vms] = read_eviction_results(
+            n_vms, n_users, n_tasks, num_cpus_per_vm
+        )
+
+    fig, ax = subplot_mosaic([["left", "right"], ["left", "right"]])
+
+    # ----------
+    # Plot 1: bar plot of the CPUsecs per execution
+    # ----------
+
+    plot_eviction_results(
+        "makespan",
+        results,
+        ax["left"],
+        num_vms=num_vms,
+        num_tasks=num_tasks,
+        num_users=num_users,
+    )
+
+    # ----------
+    # Plot 2: timeseries of one of the cluster sizes
+    # ----------
+
+    plot_eviction_results(
+        "tasks_per_user",
+        results,
+        ax["right"],
+        num_vms=timeseries_num_vms,
+        num_users=timeseries_num_users,
+    )
+
+    save_plot(fig, MAKESPAN_PLOTS_DIR, "eviction")
+
+
+@task
+def spot(ctx):
+    """
+    Macro-benchmark showing the benefits of using Granny to run on SPOT VMs.
+    - LHS: makespan slowdown wrt not using SPOT VMs (makespan_spot / makespan_no_spot)
+    - RHS: cost savings of using SPOT VMs (price_spot / price_no_spot). We
+           use different savings percentages of using spot VMs from 90% (maximum
+           reported by Azure) to 25% (90, 75, 50, 25)
+    """
+    num_vms = [8, 16, 24, 32]
+    num_tasks = [25, 50, 75, 100]
+    num_cpus_per_vm = 8
+
+    results = {}
+    for (n_vms, n_tasks) in zip(num_vms, num_tasks):
+        results[n_vms] = read_spot_results(n_vms, n_tasks, num_cpus_per_vm)
+
+    fig, ax = subplots(figsize=DOUBLE_COL_FIGSIZE_HALF)
+
+    # ----------
+    # Plot 1: makespan slowdown (spot / no spot)
+    # ----------
+
+    plot_spot_results(
+        "makespan",
+        results,
+        ax,
+        num_vms=num_vms,
+        num_tasks=num_tasks,
+    )
+
+    # Manually craft the legend
+    baselines = ["slurm", "batch", "granny"]
+    legend_entries = [
+        Patch(
+            color=get_color_for_baseline("mpi-spot", baseline),
+            label=get_label_for_baseline("mpi-spot", baseline),
+        )
+        for baseline in baselines
+    ]
+    fig.legend(
+        handles=legend_entries,
+        loc="upper center",
+        ncols=len(baselines),
+        bbox_to_anchor=(0.52, 1.07),
+    )
+
+    save_plot(fig, MAKESPAN_PLOTS_DIR, "makespan_spot_makespan")
+
+    # ----------
+    # Plot 2: stacked cost bar plot (spot) + real cost (no spot)
+    # ----------
+
+    fig, ax = subplots(figsize=DOUBLE_COL_FIGSIZE_HALF)
+
+    plot_spot_results(
+        "cost",
+        results,
+        ax,
+        num_vms=num_vms,
+        num_tasks=num_tasks,
+    )
+
+    save_plot(fig, MAKESPAN_PLOTS_DIR, "makespan_spot_cost")
+
+
+@task
+def elastic(ctx):
+    """
+    Macro-benchmark showing the benefits of using Granny to elastically scale
+    up shared memory applications to use idle vCPU cores.
+    We want to show:
+    - Each job runs for shorter -> CDF of JCT
+    - Overall we run for shorter -> Makespan
+    - We have less idle vCPU cores -> same idle plot from locality
+    - We should also have a timeseries of the idle vCPU plots
+
+    Initial idea is to have four columns
+    """
+    num_vms = [8, 16, 24, 32]
+    num_tasks = [50, 100, 150, 200]
+    num_cpus_per_vm = 8
+
+    # RHS: zoom in one of the bars
+    timeseries_num_vms = num_vms[-1]
+    timeseries_num_tasks = num_tasks[-1]
+    cdf_num_vms = timeseries_num_vms
+    cdf_num_tasks = timeseries_num_tasks
+
+    results = {}
+    for (n_vms, n_tasks) in zip(num_vms, num_tasks):
+        results[n_vms] = read_elastic_results(n_vms, n_tasks, num_cpus_per_vm)
+
+    # ----------
+    # Plot 1: makespan
+    # ----------
+
+    fig, ax = subplots(figsize=DOUBLE_COL_FIGSIZE_THIRD)
+
+    plot_elastic_results(
+        "makespan",
+        results,
+        ax,
+        num_vms=num_vms,
+        num_tasks=num_tasks,
+    )
+
+    save_plot(fig, MAKESPAN_PLOTS_DIR, "makespan_elastic_makespan")
+
+    # ----------
+    # Plot 2: percentage of idle vCPUs
+    # ----------
+
+    fig, ax = subplots(figsize=DOUBLE_COL_FIGSIZE_THIRD)
+
+    plot_elastic_results(
+        "percentage_vcpus",
+        results,
+        ax,
+        num_vms=num_vms,
+        num_tasks=num_tasks,
+        num_cpus_per_vm=num_cpus_per_vm,
+    )
+
+    # Manually craft the legend
+    baselines = ["slurm", "batch", "granny", "granny-elastic"]
+    legend_entries = [
+        Patch(
+            color=get_color_for_baseline("omp-elastic", baseline),
+            label=get_label_for_baseline("omp-elastic", baseline),
+        )
+        for baseline in baselines
+    ]
+    fig.legend(
+        handles=legend_entries,
+        loc="lower center",
+        ncols=2,
+        bbox_to_anchor=(0.56, 0.2),
+    )
+
+    save_plot(fig, MAKESPAN_PLOTS_DIR, "makespan_elastic_vcpus")
+
+    # ----------
+    # Plot 3: CDF of the JCT (for one run)
+    # ----------
+
+    fig, ax = subplots(figsize=DOUBLE_COL_FIGSIZE_THIRD)
+
+    plot_elastic_results(
+        "cdf_jct",
+        results,
+        ax,
+        cdf_num_vms=cdf_num_vms,
+        cdf_num_tasks=cdf_num_tasks,
+    )
+
+    save_plot(fig, MAKESPAN_PLOTS_DIR, "makespan_elastic_cdf_jct")
+
+    # ----------
+    # Plot 4: timeseries of % of idle CPU cores
+    # ----------
+
+    fig, ax = subplots(figsize=DOUBLE_COL_FIGSIZE_THIRD)
+
+    plot_elastic_results(
+        "ts_vcpus",
+        results,
+        ax,
+        timeseries_num_vms=timeseries_num_vms,
+        timeseries_num_tasks=timeseries_num_tasks,
+    )
+
+    save_plot(fig, MAKESPAN_PLOTS_DIR, "makespan_elastic_ts_vcpus")

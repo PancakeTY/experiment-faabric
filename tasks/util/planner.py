@@ -1,209 +1,260 @@
-from json import loads as json_loads
-from json.decoder import JSONDecodeError
-from requests import post
+from faasmctl.util.planner import (
+    get_available_hosts as planner_get_available_hosts,
+    get_in_fligh_apps as planner_get_in_fligh_apps,
+)
+from math import ceil
 from time import sleep
 
-# The conversion here must match the enum in the HttpMessage definition in
-# the planner protobuf file (faabric/src/planner/planner.proto)
-PLANNER_HTTP_MESSAGE_TYPE = {
-    "RESET": 1,
-    "GET_APP_MESSAGES": 2,
-    "GET_AVAILABLE_HOSTS": 3,
-    "GET_CONFIG": 4,
-    "GET_IN_FLIGHT_APPS": 5,
-    "FLUSH_AVAILABLE_HOSTS": 6,
-    "FLUSH_EXECUTORS": 7,
-    "EXECUTE": 8,
-    "EXECUTE_STATUS": 9,
-}
 
-PLANNER_JSON_MESSAGE_FAILED = {"dead": "beef"}
+# This method also returns the number of used VMs
+def get_num_idle_cpus_from_in_flight_apps(
+    num_vms, num_cpus_per_vm, in_flight_apps
+):
+    total_cpus = int(num_vms) * int(num_cpus_per_vm)
 
-# ----------
-# Util
-# ----------
+    worker_occupation = {}
+    total_used_cpus = 0
+    for app in in_flight_apps.apps:
+        for ip in app.hostIps:
+            if ip not in worker_occupation:
+                worker_occupation[ip] = 0
 
+            worker_occupation[ip] += 1
+            total_used_cpus += 1
 
-def prepare_planner_msg(msg_type, msg_body=None):
-    if msg_type not in PLANNER_HTTP_MESSAGE_TYPE:
-        print(
-            "Unrecognised HTTP message type for planner: {}".format(msg_type)
-        )
-        raise RuntimeError("Unrecognised planner HTTP message type")
+    num_idle_vms = int(num_vms) - len(worker_occupation.keys())
+    num_idle_cpus = total_cpus - total_used_cpus
 
-    planner_msg = {
-        "http_type": PLANNER_HTTP_MESSAGE_TYPE[msg_type],
-    }
-
-    if msg_body:
-        # FIXME: currently we use protobuf for JSON (de)-serialisation in
-        # faabric. In addition, we nest a JSON as a string in another JSON,
-        # which means that boolean values (in JSON) are serialised in the
-        # nested string as True, False. Unfortunately, protobuf only identifies
-        # as booleans the string literals `true` and `false` (with lower-case).
-        # So we need to be careful here
-        boolean_flags_in_nested_msg = ["mpi", "sgx"]
-        for key in boolean_flags_in_nested_msg:
-            if key in msg_body:
-                msg_body[key] = str(msg_body[key]).lower()
-
-        planner_msg["payload"] = str(msg_body)
-
-    return planner_msg
+    return num_idle_vms, num_idle_cpus
 
 
-# ----------
-# RESET
-# ----------
-
-
-def reset(host, port):
+def get_num_available_slots_from_in_flight_apps(
+    num_vms,
+    num_cpus_per_vm,
+    user_id=None,
+    num_evicted_vms=None,
+    openmp=False,
+    # Used to leave some slack CPUs to help de-fragment (for `mpi-locality`)
+    next_task_size=None,
+    # Used to make Granny behave like batch (for `mpi-locality`)
+    batch=False,
+):
     """
-    Reset the planner with an HTTP request. Reset clears the available hosts,
-    and the scheduling state
+    For Granny baselines, we cannot use static knowledge of the
+    allocated slots, as migrations may happen so we query the planner
     """
-    url = "http://{}:{}".format(host, port)
+    short_sleep_secs = 0.25
+    long_sleep_secs = 1
 
-    planner_msg = prepare_planner_msg("RESET")
+    while True:
+        in_flight_apps = planner_get_in_fligh_apps()
+        available_hosts = planner_get_available_hosts()
+        available_ips = [host.ip for host in available_hosts.hosts]
 
-    response = post(url, json=planner_msg, timeout=None)
-
-    if response.status_code != 200:
-        print(
-            "Error resetting planner (code: {}): {}".format(
-                response.status_code, response.text
-            )
-        )
-        raise RuntimeError("Error resetting planner")
-
-
-# ----------
-# GET_APP_MESSAGES
-# ----------
-
-
-def get_app_messages(host, port, app_id):
-    """
-    Get all the messages recorded for an app
-    """
-    url = "http://{}:{}".format(host, port)
-    # Currently we only need to set the app id to get the app messages
-    msg = {
-        "appId": app_id,
-    }
-    planner_msg = prepare_planner_msg("GET_APP_MESSAGES", msg)
-
-    response = post(url, json=planner_msg, timeout=None)
-    if response.status_code != 200:
-        print(
-            "Error getting app messages for app {} (code: {}): {}".format(
-                app_id, response.status_code, response.text
-            )
-        )
-        raise RuntimeError("Error posting GET_APP_MESSAGES")
-
-    try:
-        response_json = json_loads(response.text)
-    except JSONDecodeError as e:
-        print("Error deserialising JSON message: {}".format(e.msg))
-        print("Actual message: {}".format(response.text))
-
-    if "messages" not in response_json:
-        return []
-
-    return response_json["messages"]
-
-
-def get_msg_result(host, port, msg):
-    """
-    Wait for a message result to be registered with the planner
-    """
-    url = "http://{}:{}".format(host, port)
-    planner_status_msg = prepare_planner_msg("EXECUTE_STATUS", msg)
-    status_response = post(url, json=planner_status_msg)
-
-    while (
-        status_response.status_code != 200
-        or status_response.text.startswith("RUNNING")
-    ):
-        if not status_response.text:
+        if len(available_ips) != num_vms:
             print(
-                "Empty response text (status: {})".format(
-                    status_response.status
+                "Not enough hosts registered ({}/{}). Retrying...".format(
+                    len(available_ips), num_vms
                 )
             )
-            raise RuntimeError("Empty status response")
-        elif (
-            status_response.status_code >= 400
-            or status_response.text.startswith("FAILED")
-        ):
-            print("Error running task: {}".format(status_response.status_code))
-            print("Error message: {}".format(status_response.text))
-            raise RuntimeError("Error running task!")
+            sleep(short_sleep_secs)
+            continue
 
-        sleep(2)
-        status_response = post(url, json=planner_status_msg)
-
-    try:
-        result_json = json_loads(status_response.text)
-    except JSONDecodeError as e:
-        print("Error deserialising JSON message: {}".format(e.msg))
-        print("Actual message: {}".format(status_response.text))
-
-    return result_json
-
-
-def get_app_result(host, port, app_id, app_size, verbose=False):
-    """
-    Wait for all messages in an app identified by `app_id` to have finished.
-    We will wait for a total of `app_size` messages
-    """
-    # First, poll the planner until all messages are registered with the app
-    registered_msgs = get_app_messages(host, port, app_id)
-    while len(registered_msgs) != app_size:
-        if verbose:
-            print(
-                "Waiting for messages to be registered with app "
-                "{} ({}/{})".format(app_id, len(registered_msgs), app_size)
-            )
-        sleep(2)
-        registered_msgs = get_app_messages(host, port, app_id)
-
-    if verbose:
-        print(
-            "All messages registerd with app {} ({}/{})".format(
-                app_id, len(registered_msgs), app_size
-            )
+        available_slots = sum(
+            [
+                int(host.slots - host.usedSlots)
+                for host in available_hosts.hosts
+            ]
         )
-    # Now, for each message, wait for it to be completed
-    results = []
-    app_has_failed = False
-    for i, msg in enumerate(registered_msgs):
-        if verbose:
-            print(
-                "Polling message {} (app: {}, {}/{})".format(
-                    msg["id"], app_id, i + 1, len(registered_msgs)
-                )
-            )
-        # Poll for all the messages even if some of them have failed to ensure
-        # a graceful recovery of the error
+
+        used_slots_map = {
+            host.ip: host.usedSlots for host in available_hosts.hosts
+        }
+
+        next_evicted_vm_ips = []
         try:
-            result_json = get_msg_result(host, port, msg)
-            results.append(result_json)
-        # TODO: define a custom error like MessageExecuteFailure
-        except RuntimeError:
-            app_has_failed = True
-            results.append(PLANNER_JSON_MESSAGE_FAILED)
+            next_evicted_vm_ips = in_flight_apps.nextEvictedVmIps
+        except AttributeError:
+            pass
 
-    # If some messages in the app have actually failed, raise an error once
-    # we have all of them
-    # TODO: define a better error
-    if app_has_failed:
-        raise RuntimeError("App failed")
+        if (
+            num_evicted_vms is not None
+            and len(next_evicted_vm_ips) != num_evicted_vms
+        ):
+            print("Not enough evicted VMs registered. Retrying...")
+            sleep(short_sleep_secs)
+            continue
 
-    return results
+        worker_occupation = {}
+
+        for next_evicted_vm_ip in next_evicted_vm_ips:
+            worker_occupation[next_evicted_vm_ip] = int(num_cpus_per_vm)
+            available_slots -= int(num_cpus_per_vm)
+
+        # Annoyingly, we may query for the in-flight apps as soon as we
+        # schedule them, missing the init stage of the mpi app. Thus we
+        # sleep for a bit and ask again (we allow the size to go over the
+        # specified size in case of an elsatic scale-up)
+        if any([len(app.hostIps) < app.size for app in in_flight_apps.apps]):
+            sleep(short_sleep_secs)
+            continue
+
+        # Also prevent from scheduling an app while another app is waiting
+        # to be migrated from an evicted VM
+        must_hold_back = False
+        for app in in_flight_apps.apps:
+            if any([ip in next_evicted_vm_ips for ip in app.hostIps]):
+                print(
+                    "Detected app {} scheduled in to-be evicted VM. Retrying...".format(
+                        app.appId
+                    )
+                )
+                must_hold_back = True
+                break
+
+        if must_hold_back:
+            sleep(long_sleep_secs)
+            continue
+
+        for app in in_flight_apps.apps:
+            # If the subtype is 0, protobuf will optimise it away and the field
+            # won't be there. This try/except guards against that
+            this_app_uid = 0
+            try:
+                this_app_uid = app.subType
+            except AttributeError:
+                pass
+
+            must_prune_vm = user_id is not None and user_id != this_app_uid
+
+            for ip in app.hostIps:
+
+                # This pruning corresponds to a multi-tenant setting using
+                # mpi-evict
+                if must_prune_vm:
+                    worker_occupation[ip] = int(num_cpus_per_vm)
+                    continue
+
+                if ip not in worker_occupation:
+                    worker_occupation[ip] = 0
+
+                if worker_occupation[ip] < int(num_cpus_per_vm):
+                    worker_occupation[ip] += 1
+
+        # For OpenMP, we only care if any VM has enough slots to run the full
+        # application. Otherwise we wait.
+        if openmp:
+            if num_vms > len(list(worker_occupation.keys())):
+                return num_cpus_per_vm
+
+            return max(
+                [
+                    num_cpus_per_vm - worker_occupation[ip]
+                    for ip in worker_occupation
+                ]
+            )
+
+        # In a batch setting, we allocate resources to jobs at VM granularity
+        # The planner will by default do so, if enough free VMs are available
+        if batch and next_task_size is not None:
+            num_needed_vms = ceil(next_task_size / num_cpus_per_vm)
+            if (
+                num_vms - len(list(worker_occupation.keys()))
+            ) < num_needed_vms:
+                sleep(5 * long_sleep_secs)
+                continue
+
+        num_available_slots = (
+            num_vms - len(list(worker_occupation.keys()))
+        ) * num_cpus_per_vm
+        for ip in worker_occupation:
+            if worker_occupation[ip] != used_slots_map[ip]:
+                print(
+                    "Inconsistent worker used slots map for ip: {}".format(ip)
+                )
+                must_hold_back = True
+                break
+
+            num_available_slots += num_cpus_per_vm - worker_occupation[ip]
+
+        if must_hold_back:
+            sleep(long_sleep_secs)
+            continue
+
+        # Double-check the number of available slots with our other source of truth
+        # are consistent with the in-flight apps?
+        if num_available_slots != available_slots:
+            print(
+                "WARNING: inconsistency in the number of available slots"
+                " (in flight: {} - registered: {})".format(
+                    num_available_slots, available_slots
+                )
+            )
+            sleep(short_sleep_secs)
+            continue
+
+        # TODO: decide on the percentage, 10% or 5% ?
+        # with 10% we almost always have perfect locality
+        pctg = 0.05
+        if (
+            next_task_size is not None
+            and not batch
+            and (num_available_slots - next_task_size)
+            < int(num_vms * num_cpus_per_vm * pctg)
+        ):
+            sleep(long_sleep_secs)
+            continue
+
+        # If we have made it this far, we are done
+        break
+
+    # If we have any frozen apps, we want to un-FREEZE them to prevent building
+    # up a buffer in the planner
+    if len(in_flight_apps.frozenApps) > 0:
+        print(
+            "Detected frozen apps, so returning 0 slots: {}".format(
+                in_flight_apps.frozenApps
+            )
+        )
+        return 0
+
+    return num_available_slots
 
 
-# ----------
-# GET_AVAILABLE_HOSTS
-# ----------
+def get_xvm_links_from_part(part):
+    """
+    Calculate the number of cross-VM links for a given partition
+
+    The number of cross-VM links is the sum for each process of all the
+    non-local processes divided by two.
+    """
+    if len(part) == 1:
+        return 0
+
+    count = 0
+    for ind in range(len(part)):
+        count += sum(part[0:ind] + part[ind + 1 :]) * part[ind]
+
+    return int(count / 2)
+
+
+def get_num_xvm_links_from_in_flight_apps(in_flight_apps):
+    total_xvm_links = 0
+
+    for app in in_flight_apps.apps:
+        app_ocupation = {}
+        for ip in app.hostIps:
+            if ip not in app_ocupation:
+                app_ocupation[ip] = 0
+            app_ocupation[ip] += 1
+
+        part = list(app_ocupation.values())
+        # TODO: delete me
+        #    print("DEBUG - App: {} - Occupation: {} - Part: {} - Links: {}".format(
+        #               app.appId,
+        #               app_ocupation,
+        #               part,
+        #               get_xvm_links_from_part(part)))
+        total_xvm_links += get_xvm_links_from_part(part)
+
+    return total_xvm_links

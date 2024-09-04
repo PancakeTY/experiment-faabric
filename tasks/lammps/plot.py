@@ -5,13 +5,12 @@ from os import makedirs
 from os.path import join
 from pandas import read_csv
 from tasks.util.env import SYSTEM_NAME
-from tasks.util.faasm import get_faasm_version
 from tasks.util.lammps import (
     LAMMPS_PLOTS_DIR,
     LAMMPS_RESULTS_DIR,
     LAMMPS_SIM_WORKLOAD_CONFIGS,
 )
-from tasks.util.plot import save_plot
+from tasks.util.plot import UBENCH_PLOT_COLORS, SINGLE_COL_FIGSIZE, save_plot
 
 
 def _read_results():
@@ -32,7 +31,7 @@ def _read_results():
         grouped = results.groupby("WorldSize", as_index=False)
 
         result_dict[baseline][workload] = {
-            "world-size": results["WorldSize"].to_list(),
+            "world-size": grouped.mean()["WorldSize"].to_list(),
             "exec-time-mean": grouped.mean()["Time"].to_list(),
             "exec-time-sem": grouped.sem()["Time"].to_list(),
         }
@@ -52,7 +51,7 @@ def plot(ctx, plot_elapsed_times=True):
     num_workloads = len(workloads)
     num_procs = result_dict["granny"]["network"]["world-size"]
 
-    fig, ax = subplots()
+    fig, ax = subplots(figsize=SINGLE_COL_FIGSIZE)
     width = 0.3
     for workload_ind, workload in enumerate(workloads):
         x_wload_offset = (
@@ -74,6 +73,8 @@ def plot(ctx, plot_elapsed_times=True):
             slowdown,
             width=width,
             label=workload,
+            color=UBENCH_PLOT_COLORS[workload_ind],
+            edgecolor="black",
         )
 
     xmin = 0
@@ -84,9 +85,8 @@ def plot(ctx, plot_elapsed_times=True):
     ax.set_xlim(left=xmin)
     ax.set_xticks(list(range(17)))
     ax.set_ylim(bottom=ymin, top=ymax)
-    ax.legend()
+    ax.legend(ncols=2, loc="upper center")
     ax.set_xlabel("# MPI Processes")
-    ax.set_ylabel("Slowdown [{} / OpenMPI]".format(SYSTEM_NAME))
-    ax.set_title("Faasm Version ({})".format(get_faasm_version()))
+    ax.set_ylabel("Slowdown\n[{} / OpenMPI]".format(SYSTEM_NAME))
 
     save_plot(fig, LAMMPS_PLOTS_DIR, "lammps_slowdown")

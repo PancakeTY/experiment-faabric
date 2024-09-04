@@ -175,6 +175,22 @@ def post_async_batch_msg_and_get_result_json(msg, batch_size=100, host_list=None
     result = faasmctl_invoke_wasm(msg, num_messages=batch_size, dict_out=True, host_list=host_list)
     return result["messageResults"]
 
+
+def has_app_failed(results_json):
+    for result in results_json:
+        if "returnValue" not in result:
+            # Protobuf may omit zero values when serialising, so sometimes
+            # the return value may not be set. So if the key is not there,
+            # we assume execution was succesful
+            # TODO: make sure return value is always passed
+            return False
+
+        if int(result["returnValue"]) != 0:
+            return True
+
+    return False
+    # return any([result_json["returnValue"] for result_json in results_json])
+
 def post_async_batch_msg(app_id, msg, batch_size=100, input_list=None):
     if batch_size != len(input_list):
         print ("ERROR: batch_size != len(input_data)")

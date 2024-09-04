@@ -4,7 +4,11 @@ from invoke import task
 from os import makedirs
 from os.path import basename, join
 from tasks.migration.util import generate_host_list
-from tasks.util.env import RESULTS_DIR
+from tasks.util.env import (
+    MPI_MIGRATE_FAASM_FUNC,
+    MPI_MIGRATE_FAASM_USER,
+    RESULTS_DIR,
+)
 from tasks.util.faasm import (
     get_faasm_exec_time_from_json,
     post_async_msg_and_get_result_json,
@@ -14,7 +18,7 @@ from tasks.util.lammps import (
     LAMMPS_FAASM_MIGRATION_NET_FUNC,
     LAMMPS_SIM_WORKLOAD,
     LAMMPS_SIM_WORKLOAD_CONFIGS,
-    get_faasm_benchmark,
+    get_lammps_data_file,
     get_lammps_migration_params,
 )
 from time import sleep
@@ -48,7 +52,6 @@ def run(ctx, w, check_in=None, repeats=1, num_cores_per_vm=8):
     """
     num_vms = len(get_faasm_worker_ips())
     assert num_vms == 2, "Expected 2 VMs got: {}!".format(num_vms)
-    data_file = basename(get_faasm_benchmark(LAMMPS_SIM_WORKLOAD)["data"][0])
 
     if check_in is None:
         check_array = [0, 2, 4, 6, 8, 10]
@@ -56,13 +59,22 @@ def run(ctx, w, check_in=None, repeats=1, num_cores_per_vm=8):
         check_array = [int(check_in)]
 
     for workload in w:
-        if workload not in LAMMPS_SIM_WORKLOAD_CONFIGS:
+        if (
+            workload != "all-to-all"
+            and workload not in LAMMPS_SIM_WORKLOAD_CONFIGS
+        ):
             print(
                 "Unrecognised workload config ({}) must be one in: {}".format(
                     workload, LAMMPS_SIM_WORKLOAD.keys()
                 )
             )
-        workload_config = LAMMPS_SIM_WORKLOAD_CONFIGS[workload]
+            raise RuntimeError("Unrecognised workload: {}".format(workload))
+
+        if workload != "all-to-all":
+            workload_config = LAMMPS_SIM_WORKLOAD_CONFIGS[workload]
+            data_file = basename(
+                get_lammps_data_file(workload_config["data_file"])["data"][0]
+            )
 
         csv_name = "migration_{}.csv".format(workload)
         _init_csv_file(csv_name)
@@ -73,14 +85,12 @@ def run(ctx, w, check_in=None, repeats=1, num_cores_per_vm=8):
 
                 # Print progress
                 print(
-                    "Running migration micro-benchmark (wload:"
+                    "Running migration micro-benchmark (wload: "
                     + "{} - check-at: {} - repeat: {}/{})".format(
                         workload, check, run_num + 1, repeats
                     )
                 )
 
-                """
-                TODO: do we want to keep the all-to-all baseline?
                 if workload == "all-to-all":
                     num_loops = 100000
                     user = MPI_MIGRATE_FAASM_USER
@@ -88,21 +98,27 @@ def run(ctx, w, check_in=None, repeats=1, num_cores_per_vm=8):
                     cmdline = "{} {}".format(
                         check if check != 0 else 5, num_loops
                     )
-                """
-
-                # Run LAMMPS
-                cmdline = "-in faasm://lammps-data/{}".format(data_file)
-                msg = {
-                    "user": LAMMPS_FAASM_USER,
-                    "function": LAMMPS_FAASM_MIGRATION_NET_FUNC,
-                    "cmdline": cmdline,
-                    "mpi_world_size": int(num_cores_per_vm),
-                    "input_data": get_lammps_migration_params(
+                    input_data = None
+                else:
+                    user = LAMMPS_FAASM_USER
+                    func = LAMMPS_FAASM_MIGRATION_NET_FUNC
+                    cmdline = "-in faasm://lammps-data/{}".format(data_file)
+                    input_data = get_lammps_migration_params(
+                        check_every=check if check != 0 else 5,
                         num_loops=5,
                         num_net_loops=workload_config["num_net_loops"],
                         chunk_size=workload_config["chunk_size"],
-                    ),
+                    )
+
+                msg = {
+                    "user": user,
+                    "function": func,
+                    "cmdline": cmdline,
+                    "mpi_world_size": int(num_cores_per_vm),
                 }
+
+                if input_data is not None:
+                    msg["input_data"] = input_data
 
                 if check == 0:
                     # Setting a check fraction of 0 means we don't

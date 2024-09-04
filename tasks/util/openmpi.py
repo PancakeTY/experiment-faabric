@@ -2,11 +2,18 @@ from subprocess import run, PIPE
 from os.path import join
 from os import makedirs
 from jinja2 import Environment, FileSystemLoader
-
 from tasks.util.env import (
+    PLOTS_ROOT,
     PROJ_ROOT,
+    RESULTS_DIR,
     get_docker_tag,
 )
+from tasks.util.k8s import wait_for_pods
+
+# ----- Variables used for the OpenMPI experiment -----
+OPENMPI_RESULTS_DIR = join(RESULTS_DIR, "openmpi")
+OPENMPI_PLOTS_DIR = join(PLOTS_ROOT, "openmpi")
+# -----------------------------------------------------
 
 NATIVE_HOSTFILE = "/home/mpirun/hostfile"
 
@@ -107,6 +114,12 @@ def get_native_mpi_pods(experiment_name):
     return pod_names, pod_ips
 
 
+def restart_native_mpi_pod(experiment_name, pod_names):
+    run_kubectl_cmd(
+        experiment_name, "delete pod {}".format(" ".join(pod_names))
+    )
+
+
 def get_native_mpi_pods_ip_to_vm(experiment_name):
     # List all pods
     cmd_out = run_kubectl_cmd(
@@ -146,6 +159,9 @@ def deploy_native_mpi(experiment_name, image_name, num_vms):
         shell=True,
         check=True,
     )
+
+    namespace = get_native_mpi_namespace(experiment_name)
+    wait_for_pods(namespace, "run=faasm-openmpi", num_expected=num_vms)
 
 
 def delete_native_mpi(experiment_name, image_name, num_vms):
