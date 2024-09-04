@@ -6,6 +6,7 @@ from faasmctl.util.invoke import invoke_wasm as faasmctl_invoke_wasm
 from faasmctl.util.invoke import invoke_wasm_without_wait as faasmctl_invoke_wasm_without_wait
 from os import environ
 from collections import defaultdict
+import re
 
 
 def get_faasm_exec_time_from_json(results_json, check=False):
@@ -86,7 +87,6 @@ def get_faasm_metrics_from_json(json_result, deadline):
     # Group the results by chain ID and find the actual_time for each chained functions
     grouped_results = defaultdict(list)
     function_metrics = defaultdict(lambda: defaultdict(list))
-    print(len(json_result))
     for msg_result in json_result:
         chained_id = msg_result['chainedId']
         grouped_results[chained_id].append(msg_result)
@@ -117,6 +117,13 @@ def get_faasm_metrics_from_json(json_result, deadline):
         executor_prepare_time = int(msg_result['ExecutorPrepareTime'])
         worker_execute_start_time = int(msg_result['workerExecuteStart'])
         worker_execute_end_time = int(msg_result['workerExecuteEnd'])
+        output_data = ""
+        if 'output_data' in msg_result:
+            output_data = msg_result['output_data']
+        duration = None
+        match = re.search(r'duration:(\d+)', output_data)
+        if match:
+            duration = int(match.group(1))
         function_name = "unknown"
         if msg_result.get('parallelismId') is not None:
             function_name = msg_result['user'] + '_' + msg_result['function'] + '_' + str(msg_result['parallelismId'])
@@ -134,6 +141,8 @@ def get_faasm_metrics_from_json(json_result, deadline):
         function_metrics[function_name]['executor_prepare_time'].append(executor_prepare_time)
         function_metrics[function_name]['worker_execute_elapse'].append(worker_execute_elapse)
         function_metrics[function_name]['total_elapse'].append(total_elapse)
+        if duration is not None:
+            function_metrics[function_name]['duration'].append(duration)
 
     return actual_times, function_metrics
 
@@ -148,16 +157,17 @@ def get_faasm_version():
     return "0.0.0"
 
 
-def post_async_msg_and_get_result_json(msg, host_list=None, req_dict=None, input_list=None):
-    chainedId_list = []
-    chainedId_list.append(2)
+def post_async_msg_and_get_result_json(msg, num_message = 1, host_list=None, req_dict=None, input_list=None, chainedId_list = []):
+    # print num_message
     result = faasmctl_invoke_wasm(
         msg,
+        num_messages=num_message,
         dict_out=True,
         host_list=host_list,
         req_dict=req_dict,
         input_list=input_list,
-        chainedId_list=chainedId_list
+        chainedId_list=chainedId_list,
+        poll_period_in=0.05,
     )
     return result["messageResults"]
 

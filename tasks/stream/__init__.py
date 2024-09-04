@@ -7,6 +7,9 @@ from . import run_test
 from . import faasm_mo
 from . import faasm_sd
 from . import faasm_wc
+from . import my_wc
+from . import my_sd
+from . import my_mo
 
 ns = Collection(
     run_wc,
@@ -16,4 +19,7 @@ ns = Collection(
     faasm_sd,
     faasm_wc,
     run_test,
+    my_wc,
+    my_sd,
+    my_mo,
     )
