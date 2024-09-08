@@ -7,6 +7,7 @@ from faasmctl.util.invoke import invoke_wasm_without_wait as faasmctl_invoke_was
 from os import environ
 from collections import defaultdict
 import re
+import os
 
 
 def get_faasm_exec_time_from_json(results_json, check=False):
@@ -114,6 +115,10 @@ def get_faasm_metrics_from_json(json_result, deadline):
         chained_id = msg_result['chainedId']
         grouped_results[chained_id].append(msg_result)
 
+    msg_start_ts = min([result["start_ts"] for result in json_result])
+    msg_finish_ts = max([result["finish_ts"] for result in json_result])
+    function_metrics["application"]["msg_latency"].append(int(msg_finish_ts) - int(msg_start_ts))
+
     invalid_chained_ids = []
     actual_times = {}
     for chained_id, results in grouped_results.items():
@@ -147,6 +152,12 @@ def get_faasm_metrics_from_json(json_result, deadline):
         match = re.search(r'duration:(\d+)', output_data)
         if match:
             duration = int(match.group(1))
+        # Regular expression to capture the input_size
+        input_size = None
+        input_match = re.search(r'input_size: (\d+)', output_data)
+        if input_match:
+            input_size = int(input_match.group(1))
+
         function_name = "unknown"
         if msg_result.get('parallelismId') is not None:
             function_name = msg_result['user'] + '_' + msg_result['function'] + '_' + str(msg_result['parallelismId'])
@@ -166,6 +177,8 @@ def get_faasm_metrics_from_json(json_result, deadline):
         function_metrics[function_name]['total_elapse'].append(total_elapse)
         if duration is not None:
             function_metrics[function_name]['duration'].append(duration)
+        if input_size is not None:
+            function_metrics[function_name]['input_size'].append(input_size)    
 
     return actual_times, function_metrics
 
@@ -190,7 +203,7 @@ def post_async_msg_and_get_result_json(msg, num_message = 1, host_list=None, req
         req_dict=req_dict,
         input_list=input_list,
         chainedId_list=chainedId_list,
-        poll_period_in=0.05,
+        poll_period_in=0.01,
     )
     return result["messageResults"]
 
@@ -224,3 +237,38 @@ def post_async_batch_msg(app_id, msg, batch_size=100, input_list=None):
     elif appid != appid:
         print ("ERROR: AppID mismatch")
     return appid
+
+def write_metrics_to_log(path, batchsize, concurrency, inputbatch, total_count, average_time, function_metrics):
+    log_dir = os.path.dirname(path)
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
+
+    with open(path, 'a') as log_file:
+        log_file.write(f"Batchsize: {batchsize}, Concurrency: {concurrency}, Input Batch: {inputbatch}\n")
+        log_file.write(f"Total messages sent: {total_count}\n")
+        log_file.write(f"Average actual time: {average_time} ms\n")
+        
+        for func_name, metrics in function_metrics.items():
+            log_file.write(f"Metrics for {func_name}:\n")
+            for metric_name, times in metrics.items():
+                average_metric_time = sum(times) / len(times) if times else 0
+                log_file.write(f"  Average {metric_name}: {int(average_metric_time)} μs\n")
+        log_file.write("\n")
+
+def write_string_to_log(path, log_message):
+    """
+    Writes a log message to a log file.
+    
+    Parameters:
+        path (str): The path to the log file.
+        log_message (str): The message to be written to the log file.
+    """
+    try:
+        log_dir = os.path.dirname(path)
+        if not os.path.exists(log_dir):
+            os.makedirs(log_dir)
+
+        with open(path, 'a') as log_file:
+            log_file.write(f"{log_message}\n")
+    except Exception as e:
+        print(f"Error writing to log file: {e}")

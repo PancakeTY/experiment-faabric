@@ -3,6 +3,8 @@ from faasmctl.util.planner import reset_batch_size, scale_function_parallelism, 
 from tasks.util.faasm import (
     get_faasm_metrics_from_json,
     post_async_msg_and_get_result_json,
+    write_metrics_to_log,
+    write_string_to_log,
 ) 
 from tasks.util.thread import AtomicInteger
 
@@ -14,6 +16,7 @@ import re
 from collections import defaultdict
 
 msg = {}
+result_file = "tasks/stream/logs/my_wc_results.txt"
 
 def read_sentences_from_file(file_path):
     try:
@@ -64,12 +67,12 @@ def worker_thread(end_time, sentences, atomic_count, inputbatch):
     return results
 
 @task(default=True)
-def run(ctx, batchsize=0, concurrency = 0, inputbatch = 1):
+def run(ctx, batchsize=0, concurrency = 0, inputbatch = 1, scale = 0):
     """
     Use multiple threads to run the 'wordcount' application and check latency and throughput.
     """
-    DURATION = 20 # Seconds
-    WORKER_NUM = 20
+    DURATION = 100 # Seconds
+    WORKER_NUM = 15
     
     global msg
     msg = {
@@ -96,6 +99,9 @@ def run(ctx, batchsize=0, concurrency = 0, inputbatch = 1):
     chainedId_list = [1]
     result = send_message_and_get_result(input_data, chainedId_list)
     # print(result)
+
+    if scale > 0:
+        scale_function_parallelism("stream", "wordcountindiv_count" ,scale)
 
     end_time = time.time() + DURATION
     total_count = 0
@@ -140,3 +146,38 @@ def run(ctx, batchsize=0, concurrency = 0, inputbatch = 1):
         for metric_name, times in metrics.items():
             average_metric_time = sum(times) / len(times) if times else 0
             print(f"  Average {metric_name}: {int(average_metric_time)} μs")
+
+    write_metrics_to_log(result_file, batchsize, concurrency, inputbatch, total_count, average_time, function_metrics)
+
+@task
+def run_multiples(ctx):
+    """
+    Invoke 'run' function 10 times with batchsize=10 and inputbatch=100.
+    Concurrency will vary from 1 to 10, and results will be logged to a file.
+    """
+    batchsize = 10
+    inputbatch = 100
+
+    for concurrency in range(1, 11):  # From 1 to 10
+        print(f"Running with batchsize={batchsize}, concurrency={concurrency}, inputbatch={inputbatch}")
+        run(ctx, batchsize=batchsize, concurrency=concurrency, inputbatch=inputbatch)
+        print(f"Completed run with concurrency={concurrency}\n")
+
+@task
+def run_batchsize(ctx):
+    """
+    Invoke 'run' function with varying batch sizes and concurrency levels.
+    Batchsize will vary among 5, 10, 25, 50, 75, 100, 200, 300, 
+    and results will be logged to a file.
+    """
+    inputbatch = 300
+    concurrency = 20
+    batch_sizes = [5, 10, 25, 50, 75, 100]
+    global result_file
+
+    for batchsize in batch_sizes:
+        start_message = f"Running with batchsize={batchsize}, concurrency={concurrency}, inputbatch={inputbatch}, scale=3"
+        print(start_message)
+        write_string_to_log(result_file, start_message)
+        run(ctx, batchsize=batchsize, concurrency=concurrency, inputbatch=inputbatch)
+        print(f"Completed run with batchsize={batchsize}, concurrency={concurrency}\n")

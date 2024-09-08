@@ -3,17 +3,23 @@ from faasmctl.util.planner import reset_batch_size, scale_function_parallelism, 
 from tasks.util.faasm import (
     get_faasm_metrics_from_json,
     post_async_msg_and_get_result_json,
+    write_metrics_to_log,
+    write_string_to_log,
 ) 
 from tasks.util.thread import AtomicInteger
 
+from datetime import datetime
 import time
 from invoke import task
 import concurrent.futures
 import threading
 import re
 from collections import defaultdict
+import json
 
 msg = {}
+result_file = 'tasks/stream/logs/my_sd_results.txt'
+output_file = 'tasks/stream/results/'
 
 def read_data_from_file(file_path):
     data_vectors = []
@@ -51,12 +57,12 @@ def worker_thread(end_time, sentences, atomic_count, inputbatch):
     return results
 
 @task(default=True)
-def run(ctx, batchsize=0, concurrency = 0, inputbatch = 1):
+def run(ctx, batchsize=0, concurrency = 0, inputbatch = 1, scale = 0):
     """
     Use multiple threads to run the 'sd' application and check latency and throughput.
     """
-    DURATION = 20 # Seconds
-    WORKER_NUM = 20
+    DURATION = 100 # Seconds
+    WORKER_NUM = 15
     
     global msg
     msg = {
@@ -72,7 +78,7 @@ def run(ctx, batchsize=0, concurrency = 0, inputbatch = 1):
 
     if concurrency > 0:
         reset_max_replicas(concurrency)
-        
+    
     register_function_state("stream_sd_moving_avg", "partitionedAttribute", "partitionStateKey")
 
     flush_workers()
@@ -84,6 +90,9 @@ def run(ctx, batchsize=0, concurrency = 0, inputbatch = 1):
     result = send_message_and_get_result(input_data, chainedId_list)
     # print(result)
 
+    if scale > 0:
+        scale_function_parallelism("stream", "sd_moving_avg" ,scale)
+
     end_time = time.time() + DURATION
     total_count = 0
     total_time = 0
@@ -93,6 +102,9 @@ def run(ctx, batchsize=0, concurrency = 0, inputbatch = 1):
     batches_min_start_ts = None
     deadline = None
     function_metrics = defaultdict(lambda: defaultdict(list))
+        
+    global output_file
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=WORKER_NUM) as executor:
         futures = [executor.submit(worker_thread, end_time, records, atomic_count, inputbatch) for _ in range(WORKER_NUM)]
 
@@ -108,6 +120,9 @@ def run(ctx, batchsize=0, concurrency = 0, inputbatch = 1):
                             deadline = batches_min_start_ts + DURATION * 1000
 
                     actual_times, app_metrics = get_faasm_metrics_from_json(batch_result_json, deadline)
+                    with lock:
+                            actual_times_str = json.dumps(actual_times, indent=4)
+                            write_string_to_log(output_file, actual_times_str)
                     for actual_time in actual_times.values():
                         total_time += actual_time
                         total_count += 1
@@ -127,3 +142,55 @@ def run(ctx, batchsize=0, concurrency = 0, inputbatch = 1):
         for metric_name, times in metrics.items():
             average_metric_time = sum(times) / len(times) if times else 0
             print(f"  Average {metric_name}: {int(average_metric_time)} μs")
+
+
+    global result_file
+    write_metrics_to_log(result_file, batchsize, concurrency, inputbatch, total_count, average_time, function_metrics)
+
+@task
+def run_multiples(ctx):
+    """
+    Invoke 'run' function 10 times with batchsize=10 and inputbatch=100.
+    Concurrency will vary from 1 to 10, and results will be logged to a file.
+    """
+    batchsize = 30
+    inputbatch = 500
+    concurrency_list = [5, 10, 15, 20, 30]
+    global output_file 
+    current_date = datetime.now().strftime("%Y-%m-%d")
+    output_file = f"{output_file}{current_date}/sd_exp_1"
+
+    for concurrency in concurrency_list:  # From 1 to 10
+        timestamp = datetime.now().strftime("%d--%b--%Y %H:%M:%S")
+        start_message = f"{timestamp} Running with batchsize={batchsize}, concurrency={concurrency}, inputbatch={inputbatch}, scale=3"
+        print(start_message)
+        write_string_to_log(result_file, start_message)
+        write_string_to_log(output_file, start_message)
+        
+        run(ctx, batchsize=batchsize, concurrency=concurrency, inputbatch=inputbatch, scale=3)
+        print(f"Completed run with concurrency={concurrency}\n")
+
+@task
+def run_batchsize(ctx):
+    """
+    Invoke 'run' function with varying batch sizes and concurrency levels.
+    Batchsize will vary among 5, 10, 20, 30, 40, 50, 75, 100
+    and results will be logged to a file.
+    """
+    inputbatch = 300
+    concurrency = 1
+    batch_sizes = [5, 10, 15, 20, 30]
+    
+    global output_file 
+    current_date = datetime.now().strftime("%Y-%m-%d")
+    output_file = f"{output_file}{current_date}/sd_exp_1"
+    global result_file
+
+    for batchsize in batch_sizes:
+        timestamp = datetime.now().strftime("%d--%b--%Y %H:%M:%S")
+        start_message = f"{timestamp} Running with batchsize={batchsize}, concurrency={concurrency}, inputbatch={inputbatch}, scale=3"
+        print(start_message)
+        write_string_to_log(result_file, start_message)
+        write_string_to_log(output_file, start_message)
+        run(ctx, batchsize=batchsize, concurrency=concurrency, inputbatch=inputbatch)
+        print(f"Completed run with batchsize={batchsize}, concurrency={concurrency}\n")

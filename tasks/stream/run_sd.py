@@ -2,7 +2,7 @@ import time
 from collections import defaultdict
 from invoke import task
 from faasmctl.util.flush import flush_workers, flush_scheduler
-from faasmctl.util.planner import reset_batch_size, scale_function_parallelism, register_function_state
+from faasmctl.util.planner import reset_batch_size, scale_function_parallelism, register_function_state,reset_max_replicas
 from faasmctl.util.invoke import query_result
 import concurrent.futures
 from google.protobuf.json_format import MessageToDict
@@ -14,9 +14,11 @@ from tasks.util.faasm import (
     get_faasm_metrics_from_json,
     post_async_batch_msg_and_get_result_json,
     post_async_batch_msg,
+    write_metrics_to_log,
+    write_string_to_log,
 )
 
-def send_message_without_result(size=50):
+def send_message_without_result(size=300):
     msg = {
         "user": "stream",
         "function": "sd_moving_avg",
@@ -69,7 +71,9 @@ def test_contention(ctx, scale=3, batchsize=50):
     if batchsize > 0:
         reset_batch_size(batchsize)
 
-    limit_time = 10
+    reset_max_replicas(10)
+
+    limit_time = 100
 
     appid = 100000
     appid_list = []
@@ -77,7 +81,7 @@ def test_contention(ctx, scale=3, batchsize=50):
     start_time = time.time()
     end_time = start_time + limit_time
     batch_start = 0
-    batch_size = 100
+    batch_size = 300
 
     # Invoke the function in batches
     while time.time() < end_time and batch_start < records_len:
@@ -147,3 +151,19 @@ def test_contention(ctx, scale=3, batchsize=50):
         for metric_name, times in metrics.items():
             average_metric_time = sum(times) / len(times) if times else 0
             print(f"  Average {metric_name}: {int(average_metric_time)} μs")
+    write_metrics_to_log("tasks/stream/logs/my_sd_results.txt", batchsize, 10, 300, total_count, average_time, function_metrics)
+
+
+@task
+def run_multiple_batches(ctx, scale=3):
+    """
+    Run the 'test_contention' task with different batch sizes: 5, 10, 15, 20, 30, 50.
+    """
+    batch_sizes = [5, 10, 15, 20, 30, 50]
+
+    for batchsize in batch_sizes:
+        print(f"Running test_contention with batchsize: {batchsize}")
+        write_string_to_log("tasks/stream/logs/my_sd_results.txt", f"batchsize {batchsize}")
+        # Call the test_contention task with the current batchsize
+        test_contention(ctx, scale=scale, batchsize=batchsize)
+        print(f"Completed test_contention with batchsize: {batchsize}")

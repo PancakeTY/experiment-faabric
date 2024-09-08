@@ -44,6 +44,7 @@ def send_message_and_get_result(input_id, input_data, input_batch):
     # chained Id should start from 1
     chainedId_list = list(range(input_id + 1, input_id + 1 + input_batch))
 
+    print(input_data)
     result_json = post_async_msg_and_get_result_json(msg, num_messages = input_batch, input_list=input_data, chainedId_list = chainedId_list)
     actual_times, num = get_chained_faasm_exec_time_from_json(result_json)
     return actual_times, num
@@ -70,8 +71,8 @@ def run(ctx, input_batch = 1):
     Use multiple threads to run the 'machine outlier' application and check latency and throughput.
     """
     FILE_PATH = 'tasks/stream/data/machine_usage.csv'
-    DURATION = 10 # Seconds
-    WORKER_NUM = 5
+    DURATION = 100 # Seconds
+    WORKER_NUM = 10
 
     records = read_data_from_file(FILE_PATH)
     total_records = len(records)

@@ -47,6 +47,10 @@ def test_contention(ctx, scale=1, batchsize=50):
         "function": "mo_score",
     }
 
+    register_function_state("mo_", "partitionedAttribute", "partitionStateKey")
+    register_function_state("run_mo", "partitionedAttribute", "partitionStateKey")
+    register_function_state("run_mo", "partitionedAttribute", "partitionStateKey")
+
     input_data = generate_input_data(records, 0, 0)
     appid = 1
     print(input_data)

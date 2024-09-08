@@ -9,7 +9,7 @@ from . import faasm_wc
 from . import my_wc
 from . import my_sd
 from . import my_mo
-
+from . import run_test
 ns = Collection(
     run_wc,
     run_mo,
