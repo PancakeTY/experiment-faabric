@@ -118,9 +118,9 @@ def get_faasm_metrics_from_json(json_result, deadline):
         chained_id = msg_result['chainedId']
         grouped_results[chained_id].append(msg_result)
 
-    msg_start_ts = min([result["start_ts"] for result in json_result])
-    msg_finish_ts = max([result["finish_ts"] for result in json_result])
-    function_metrics["application"]["msg_latency"].append(int(msg_finish_ts) - int(msg_start_ts))
+    msg_start_ts = int(min([result["start_ts"] for result in json_result]))
+    msg_finish_ts = int(max([result["finish_ts"] for result in json_result]))
+    function_metrics["application"]["msg_latency"].append(msg_finish_ts - msg_start_ts)
 
     invalid_chained_ids = []
     actual_times = {}
@@ -183,7 +183,7 @@ def get_faasm_metrics_from_json(json_result, deadline):
         if input_size is not None:
             function_metrics[function_name]['input_size'].append(input_size)    
 
-    return actual_times, function_metrics
+    return actual_times, function_metrics, msg_start_ts, msg_finish_ts
 
 def get_faasm_planner_host_port():
     return faasmctl_get_planner_host_port(get_faasm_ini_file())
@@ -289,6 +289,8 @@ def async_invoke_thread(records, atomic_count, input_batchsize, INPUT_MSG, input
     print(f"thread Start time: {start_time}")
     while time.time() <= end_time:
         input_index = atomic_count.get_and_increment(input_batchsize)
+        if input_index + input_batchsize >= len(records):
+            break
         input_data = generate_input_data(records, input_index, input_batchsize, input_map)
         # Preparae the app id and chained id.
         # The app id is the first chained id of the batch.
@@ -301,8 +303,33 @@ def async_invoke_thread(records, atomic_count, input_batchsize, INPUT_MSG, input
         if appid_return is not None:
             with appid_list_lock:
                 appid_list.append(appid_return)
-        now = time.time()
-        print(f"{now}Sent batch of {input_batchsize} messages")
+        # now = time.time()
+        # print(f"{now}Sent batch of {input_batchsize} messages")
+
+def filter_json_results(json_results):
+    filtered_results = []
+    for msg_result in json_results:
+        # Extract only the required fields
+        filtered_result = {
+            'chainedId': msg_result.get('chainedId'),
+            'start_ts': msg_result.get('start_ts'),
+            'finish_ts': msg_result.get('finish_ts'),
+            'plannerQueueTime': msg_result.get('plannerQueueTime'),
+            'plannerPopTime': msg_result.get('plannerPopTime'),
+            'plannerDispatchTime': msg_result.get('plannerDispatchTime'),
+            'workerQueueTime': msg_result.get('workerQueueTime'),
+            'workerPopTime': msg_result.get('workerPopTime'),
+            'ExecutorPrepareTime': msg_result.get('ExecutorPrepareTime'),
+            'workerExecuteStart': msg_result.get('workerExecuteStart'),
+            'workerExecuteEnd': msg_result.get('workerExecuteEnd'),
+            'output_data': msg_result.get('output_data'),
+            'user': msg_result.get('user'),
+            'function': msg_result.get('function'),
+            'parallelismId': msg_result.get('parallelismId')  # This can be None
+        }
+        filtered_results.append(filtered_result)
+    return filtered_results
+
 
 def get_result_thread(appid_list, appid_list_lock, shared_batches_min_start_ts, start_ts_lock, batches_result, result_lock, end_time):
     # Get next appid to query
@@ -321,10 +348,11 @@ def get_result_thread(appid_list, appid_list_lock, shared_batches_min_start_ts, 
         # Get the result
         ber_status = faasmctl_query_result(appid)
         json_results = MessageToDict(ber_status)["messageResults"]
-        start_ts = int(min([result_json["start_ts"] for result_json in json_results]))
+        filtered_json_results = filter_json_results(json_results)
+        start_ts = int(min([result_json["start_ts"] for result_json in filtered_json_results]))
         with start_ts_lock:
             if shared_batches_min_start_ts[0] is None or start_ts < shared_batches_min_start_ts[0]:
                 shared_batches_min_start_ts[0] = start_ts
         with result_lock:
-            batches_result.append(json_results)
+            batches_result.append(filtered_json_results)
    
