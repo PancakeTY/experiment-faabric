@@ -10,6 +10,8 @@ from . import my_wc
 from . import my_sd
 from . import my_mo
 from . import run_test
+from . import exp_sd
+
 ns = Collection(
     run_wc,
     run_mo,
@@ -21,4 +23,5 @@ ns = Collection(
     my_wc,
     my_sd,
     my_mo,
+    exp_sd,
     )

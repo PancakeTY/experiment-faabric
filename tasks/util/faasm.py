@@ -4,11 +4,14 @@ from faasmctl.util.config import (
 )
 from faasmctl.util.invoke import invoke_wasm as faasmctl_invoke_wasm
 from faasmctl.util.invoke import invoke_wasm_without_wait as faasmctl_invoke_wasm_without_wait
+from faasmctl.util.invoke import query_result as faasmctl_query_result
 from os import environ
 from collections import defaultdict
 import re
 import os
-
+import threading
+import time
+from google.protobuf.json_format import MessageToDict
 
 def get_faasm_exec_time_from_json(results_json, check=False):
     """
@@ -227,11 +230,15 @@ def has_app_failed(results_json):
     return False
     # return any([result_json["returnValue"] for result_json in results_json])
 
-def post_async_batch_msg(app_id, msg, batch_size=100, input_list=None):
+def post_async_batch_msg(app_id, msg, batch_size=1, input_list=None, chained_id_list= None):
     if batch_size != len(input_list):
         print ("ERROR: batch_size != len(input_data)")
         assert False
-    appid = faasmctl_invoke_wasm_without_wait(app_id, msg_dict=msg, num_messages=batch_size, input_list=input_list)
+    if batch_size != len(chained_id_list):
+        print ("ERROR: batch_size != len(chained_id_list)")
+        assert False
+    appid = faasmctl_invoke_wasm_without_wait(app_id, msg_dict=msg, num_messages=batch_size, 
+                                              input_list=input_list, chained_id_list=chained_id_list, num_retries = 10000, sleep_period_secs=0.05)
     if appid is None:
         print ("ERROR: AppID invoke failed")
     elif appid != appid:
@@ -272,3 +279,52 @@ def write_string_to_log(path, log_message):
             log_file.write(f"{log_message}\n")
     except Exception as e:
         print(f"Error writing to log file: {e}")
+
+def generate_input_data(records, start, size, input_map):
+    # Use input_map to access the specific indices for each attribute
+    return [{key: record[input_map[key]] for key in input_map} for record in records[start:start + size]]
+
+def async_invoke_thread(records, atomic_count, input_batchsize, INPUT_MSG, input_map, appid_list, appid_list_lock, end_time):
+    start_time = time.time()
+    print(f"thread Start time: {start_time}")
+    while time.time() <= end_time:
+        input_index = atomic_count.get_and_increment(input_batchsize)
+        input_data = generate_input_data(records, input_index, input_batchsize, input_map)
+        # Preparae the app id and chained id.
+        # The app id is the first chained id of the batch.
+        # The chained id is the index of the input data from the input file
+        chained_id_list = [input_index + i for i in range(input_batchsize)]
+
+        # Send batch async message
+        appid_return = post_async_batch_msg(input_index, INPUT_MSG, input_batchsize, input_data, chained_id_list)
+        # Update shared resources safely
+        if appid_return is not None:
+            with appid_list_lock:
+                appid_list.append(appid_return)
+        now = time.time()
+        print(f"{now}Sent batch of {input_batchsize} messages")
+
+def get_result_thread(appid_list, appid_list_lock, shared_batches_min_start_ts, start_ts_lock, batches_result, result_lock, end_time):
+    # Get next appid to query
+    while True:
+        with appid_list_lock:
+            if not appid_list:
+                # If the time exceeds the end time, break the loop
+                if time.time() > end_time:
+                    break
+            else:
+                appid = appid_list.pop(0)
+        if appid is None:
+            time.sleep(1)
+            continue
+
+        # Get the result
+        ber_status = faasmctl_query_result(appid)
+        json_results = MessageToDict(ber_status)["messageResults"]
+        start_ts = int(min([result_json["start_ts"] for result_json in json_results]))
+        with start_ts_lock:
+            if shared_batches_min_start_ts[0] is None or start_ts < shared_batches_min_start_ts[0]:
+                shared_batches_min_start_ts[0] = start_ts
+        with result_lock:
+            batches_result.append(json_results)
+   
