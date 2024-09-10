@@ -238,7 +238,8 @@ def post_async_batch_msg(app_id, msg, batch_size=1, input_list=None, chained_id_
         print ("ERROR: batch_size != len(chained_id_list)")
         assert False
     appid = faasmctl_invoke_wasm_without_wait(app_id, msg_dict=msg, num_messages=batch_size, 
-                                              input_list=input_list, chained_id_list=chained_id_list, num_retries = 10000, sleep_period_secs=0.05)
+                                              input_list=input_list, chained_id_list=chained_id_list,
+                                              num_retries = 10000, sleep_period_secs=0.05)
     if appid is None:
         print ("ERROR: AppID invoke failed")
     elif appid != appid:

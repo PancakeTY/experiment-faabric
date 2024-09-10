@@ -11,6 +11,7 @@ from . import my_sd
 from . import my_mo
 from . import run_test
 from . import exp_sd
+from . import stream_sd
 
 ns = Collection(
     run_wc,
@@ -24,4 +25,5 @@ ns = Collection(
     my_sd,
     my_mo,
     exp_sd,
+    stream_sd,
     )
