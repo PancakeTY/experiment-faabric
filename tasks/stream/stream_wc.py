@@ -5,6 +5,7 @@ from collections import defaultdict
 from invoke import task
 import concurrent.futures
 import json
+import re
 
 # Utility imports for Faasm and task management
 from faasmctl.util.flush import flush_workers, flush_scheduler
@@ -35,13 +36,34 @@ CURRENT_DATE = datetime.now().strftime("%Y-%m-%d")
 DURATION = 600
 INPUT_BATCHSIZE = 300
 NUM_INPUT_THREADS = 10
-INPUT_FILE = 'tasks/stream/data/data_sensor_sorted.txt'
+INPUT_FILE = 'tasks/stream/data/books.txt'
 INPUT_MSG = {
     "user": "stream",
-    "function": "sd_moving_avg",
+    "function": "wordcountindiv_split",
 }
-RESULT_FILE = 'tasks/stream/logs/my_sd_results-2.txt'
-INPUT_MAP = {"partitionedAttribute": 3, "temperature": 4}
+RESULT_FILE = 'tasks/stream/logs/my_wc_results-1.txt'
+INPUT_MAP = {"sentence": 0}
+
+def read_sentences_from_file(file_path):
+    try:
+        with open(file_path, 'r') as file:
+            text = file.read()
+    except FileNotFoundError:
+        print(f"File {file_path} not found.")
+        return []
+
+    # Remove all non-alphabetic characters and convert to lowercase
+    cleaned_text = re.sub(r'[^a-zA-Z\s]', '', text).lower()
+    
+    # Split text into words
+    words = cleaned_text.split()
+    print(f"Total words extracted: {len(words)}")
+
+    # Group words into sentences of 10 words each
+    sentences = [[' '.join(words[i:i+10])] for i in range(0, len(words), 10)]
+    print(f"Total sentences created: {len(sentences)}")
+
+    return sentences
 
 @task
 def run(ctx, scale=0, batchsize=0, concurrency=10):
@@ -53,11 +75,11 @@ def run(ctx, scale=0, batchsize=0, concurrency=10):
     write_string_to_log(RESULT_FILE, f"Batchsize: {batchsize}, Concurrency: {concurrency}, Scale: {scale}\n")
 
     # Get records
-    records = read_data_from_txt_file(INPUT_FILE)
+    records = read_sentences_from_file(INPUT_FILE)
     flush_workers()
     flush_scheduler()
     
-    register_function_state("stream_sd_moving_avg", "partitionedAttribute", "partitionStateKey")
+    register_function_state("stream_wordcountindiv_count", "partitionedAttribute", "partitionStateKey")
     
     # Run one request at begining
     input_data = generate_input_data(records, 0, 1, INPUT_MAP)
@@ -66,7 +88,7 @@ def run(ctx, scale=0, batchsize=0, concurrency=10):
 
     # Adjust the parameters
     if scale > 1:
-        scale_function_parallelism("stream", "sd_moving_avg" ,scale)
+        scale_function_parallelism("stream", "wordcountindiv_count" ,scale)
 
     if batchsize > 0:
         reset_batch_size(batchsize)
