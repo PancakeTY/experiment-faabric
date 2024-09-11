@@ -12,12 +12,10 @@ from faasmctl.util.planner import (
 from faasmctl.util.invoke import query_result
 import concurrent.futures
 import threading
-import re
 from tasks.util.thread import AtomicInteger
 from tasks.util.file import copy_outout, load_app_results, read_data_from_txt_file
 from datetime import datetime
 import json
-import numpy as np
 
 from tasks.util.faasm import (
     get_faasm_exec_chained_milli_time_from_json,
@@ -28,6 +26,7 @@ from tasks.util.faasm import (
     get_result_thread,
     async_invoke_thread,
     generate_input_data,
+    statistics_result,
 )
 
 # Static
@@ -52,9 +51,10 @@ def run(ctx, scale=0, batchsize=0, concurrency=10):
     """
     global INPUT_BATCHSIZE, INPUT_FILE, INPUT_MSG, DURATION, RESULT_FILE, INPUT_MAP
     global NUM_INPUT_THREADS
+    write_string_to_log(RESULT_FILE, f"Batchsize: {batchsize}, Concurrency: {concurrency}, Scale: {scale}\n")
+
     # Get records
     records = read_data_from_txt_file(INPUT_FILE)
-
     flush_workers()
     flush_scheduler()
     
@@ -111,72 +111,29 @@ def run(ctx, scale=0, batchsize=0, concurrency=10):
     get_result_end_time = time.time()
     duration = get_result_end_time - get_result_start_time
     print(f"Duration to get result: {duration}")
-
-    function_metrics = defaultdict(lambda: defaultdict(list))
-    actual_times_array = []
-    json_result = batches_result[1]
-    tmp_msg_start_ts = int(min([result["start_ts"] for result in json_result]))
-    deadline = tmp_msg_start_ts + DURATION
-    min_start_ts = None
-    max_finish_ts = None
-
-    for app_result in batches_result:
-        actual_times, app_metrics, msg_start_ts, msg_finish_ts = get_faasm_metrics_from_json(app_result, deadline)
-
-        # Update the minimum start timestamp
-        if min_start_ts is None or msg_start_ts < min_start_ts:
-            min_start_ts = msg_start_ts
-            deadline = min_start_ts + DURATION
-
-        # Update the maximum finish timestamp
-        if max_finish_ts is None or msg_finish_ts > max_finish_ts:
-            max_finish_ts = msg_finish_ts
-
-        actual_times_str = json.dumps(actual_times, indent=4)
-        actual_times_array.extend(actual_times.values())
-        for func_name, metrics in app_metrics.items():
-            for metric_name, times in metrics.items():
-                function_metrics[func_name][metric_name].extend(times)
-
-    np_average_time = np.mean(actual_times_array)
-    np_median_time = np.median(actual_times_array)
-    np_percentile_99_time = np.percentile(actual_times_array, 99)
-    np_percentile_95_time = np.percentile(actual_times_array, 95)
-
-    duration = max_finish_ts - min_start_ts
-
-    np_result_message = (
-                "np result: \n"
-                f"Total messages sent: {len(actual_times_array)},\n"
-                f"Average actual time: {np_average_time} ms,\n"
-                f"Median actual time: {np_median_time} ms,\n"
-                f"99th percentile actual time: {np_percentile_99_time} ms,\n"
-                f"95th percentile actual time: {np_percentile_95_time} ms,\n"
-                f"Start timestamp: {min_start_ts}\n"
-                f"Finish timestamp: {max_finish_ts}\n"
-                f"Duration: {duration} ms\n")
-
+    np_result_message, function_metrics = statistics_result(batches_result, DURATION)
     print(np_result_message)
+    write_string_to_log(RESULT_FILE, np_result_message)
+
     for func_name, metrics in function_metrics.items():
         print(f"Metrics for {func_name}:")
         for metric_name, times in metrics.items():
             average_metric_time = sum(times) / len(times) if times else 0
             print(f"  Average {metric_name}: {int(average_metric_time)} μs")
-    write_string_to_log(RESULT_FILE, np_result_message)
-    write_metrics_to_log(RESULT_FILE, batchsize, concurrency, 300, len(actual_times_array), np_average_time, function_metrics)
+    write_metrics_to_log(RESULT_FILE, function_metrics)
 
 
 @task
 def run_multiple_batches(ctx, scale=0):
     """
-    Run the 'test_contention' task with different batch sizes: 5, 10, 15, 20, 30, 50.
+    Run the 'test_contention' task with different batch sizes: 1, 5, 10, 15, 20, 30, 50.
     """
     write_string_to_log(RESULT_FILE, CUTTING_LINE)
 
     inputbatch = 300
     concurrency = 10
-    # batch_sizes = [100, 75, 50, 30, 20, 15, 10, 5, 1]
-    batch_sizes = [30]
+    batch_sizes = [1, 5, 10, 15, 20, 30, 50]
+    # batch_sizes = [30]
     global DURATION
 
     for batchsize in batch_sizes:

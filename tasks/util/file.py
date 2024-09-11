@@ -1,5 +1,7 @@
-from faasmctl.util.config import faasmctl_get_faasm_ini_file, faasmctl_get_faasm_ini_value
+from faasmctl.util.config import get_faasm_ini_file as faasmctl_get_faasm_ini_file
+from faasmctl.util.config import get_faasm_ini_value as faasmctl_get_faasm_ini_value
 
+import subprocess
 import json
 from typing import Dict, Any, List
 

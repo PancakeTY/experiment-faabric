@@ -12,6 +12,8 @@ import os
 import threading
 import time
 from google.protobuf.json_format import MessageToDict
+import numpy as np
+import json
 
 def get_faasm_exec_time_from_json(results_json, check=False):
     """
@@ -118,9 +120,8 @@ def get_faasm_metrics_from_json(json_result, deadline):
         chained_id = msg_result['chainedId']
         grouped_results[chained_id].append(msg_result)
 
-    msg_start_ts = int(min([result["start_ts"] for result in json_result]))
-    msg_finish_ts = int(max([result["finish_ts"] for result in json_result]))
-    function_metrics["application"]["msg_latency"].append(msg_finish_ts - msg_start_ts)
+    msg_start_ts = None
+    msg_finish_ts = None
 
     invalid_chained_ids = []
     actual_times = {}
@@ -139,6 +140,10 @@ def get_faasm_metrics_from_json(json_result, deadline):
         if chained_id in invalid_chained_ids:
             # print(f"Skip invalid chained_id: {chained_id}")
             continue
+        if msg_start_ts is None or int(msg_result["start_ts"]) < msg_start_ts:
+            msg_start_ts = int(msg_result["start_ts"])
+        if msg_finish_ts is None or int(msg_result["finish_ts"]) > msg_finish_ts:
+            msg_finish_ts = int(msg_result["finish_ts"])
         # Get the mertics
         planner_queue_time = int(msg_result['plannerQueueTime'])
         planner_pop_time = int(msg_result['plannerPopTime'])
@@ -182,6 +187,9 @@ def get_faasm_metrics_from_json(json_result, deadline):
             function_metrics[function_name]['duration'].append(duration)
         if input_size is not None:
             function_metrics[function_name]['input_size'].append(input_size)    
+    
+    if msg_start_ts is not None and msg_finish_ts is not None:
+        function_metrics["application"]["msg_latency"].append((msg_finish_ts - msg_start_ts) * 1000)
 
     return actual_times, function_metrics, msg_start_ts, msg_finish_ts
 
@@ -246,16 +254,12 @@ def post_async_batch_msg(app_id, msg, batch_size=1, input_list=None, chained_id_
         print ("ERROR: AppID mismatch")
     return appid
 
-def write_metrics_to_log(path, batchsize, concurrency, inputbatch, total_count, average_time, function_metrics):
+def write_metrics_to_log(path, function_metrics):
     log_dir = os.path.dirname(path)
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
 
     with open(path, 'a') as log_file:
-        log_file.write(f"Batchsize: {batchsize}, Concurrency: {concurrency}, Input Batch: {inputbatch}\n")
-        log_file.write(f"Total messages sent: {total_count}\n")
-        log_file.write(f"Average actual time: {average_time} ms\n")
-        
         for func_name, metrics in function_metrics.items():
             log_file.write(f"Metrics for {func_name}:\n")
             for metric_name, times in metrics.items():
@@ -357,3 +361,44 @@ def get_result_thread(appid_list, appid_list_lock, shared_batches_min_start_ts, 
         with result_lock:
             batches_result.append(filtered_json_results)
    
+def statistics_result(batches_result, DURATION):
+    function_metrics = defaultdict(lambda: defaultdict(list))
+    actual_times_array = []
+    json_result = batches_result[1]
+    tmp_msg_start_ts = int(min([result["start_ts"] for result in json_result]))
+    deadline = tmp_msg_start_ts + DURATION * 1000
+    min_start_ts = None
+    max_finish_ts = None
+    for app_result in batches_result:
+        actual_times, app_metrics, msg_start_ts, msg_finish_ts = get_faasm_metrics_from_json(app_result, deadline)
+        # Update the minimum start timestamp
+        if msg_start_ts is None or msg_finish_ts is None:
+            continue
+        if min_start_ts is None or msg_start_ts < min_start_ts:
+            min_start_ts = msg_start_ts
+            deadline = min_start_ts + DURATION * 1000
+        # Update the maximum finish timestamp
+        if max_finish_ts is None or msg_finish_ts > max_finish_ts:
+            max_finish_ts = msg_finish_ts
+        actual_times_str = json.dumps(actual_times, indent=4)
+        actual_times_array.extend(actual_times.values())
+        for func_name, metrics in app_metrics.items():
+            for metric_name, times in metrics.items():
+                function_metrics[func_name][metric_name].extend(times)
+    print(f"Length of actual_times_array: {len(actual_times_array)}")
+    np_average_time = np.mean(actual_times_array)
+    np_median_time = np.median(actual_times_array)
+    np_percentile_99_time = np.percentile(actual_times_array, 99)
+    np_percentile_95_time = np.percentile(actual_times_array, 95)
+    duration = max_finish_ts - min_start_ts
+    np_result_message = (
+                "Numpy result: \n"
+                f"Total messages sent: {len(actual_times_array)},\n"
+                f"Average actual time: {np_average_time} ms,\n"
+                f"Median actual time: {np_median_time} ms,\n"
+                f"99th percentile actual time: {np_percentile_99_time} ms,\n"
+                f"95th percentile actual time: {np_percentile_95_time} ms,\n"
+                f"Start timestamp: {min_start_ts}\n"
+                f"Finish timestamp: {max_finish_ts}\n"
+                f"Duration: {duration} ms\n")
+    return np_result_message, function_metrics
