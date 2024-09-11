@@ -13,6 +13,7 @@ from . import run_test
 from . import exp_sd
 from . import stream_sd
 from . import stream_wc
+from . import stream_mo
 
 ns = Collection(
     run_wc,
@@ -28,4 +29,5 @@ ns = Collection(
     exp_sd,
     stream_sd,
     stream_wc,
+    stream_mo,
     )
