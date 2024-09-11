@@ -125,13 +125,13 @@ def run(ctx, scale=0, batchsize=0, concurrency=10):
 @task
 def run_multiple_batches(ctx, scale=0):
     """
-    Run the 'test_contention' task with different batch sizes: 1, 5, 10, 15, 20, 30, 50.
+    Run the 'test_contention' task with different batch sizes: 1, 5, 10, 15, 20, 30, 50, 75, 100.
     """
     write_string_to_log(RESULT_FILE, CUTTING_LINE)
 
     inputbatch = 300
     concurrency = 10
-    batch_sizes = [1, 5, 10, 15, 20, 30, 50]
+    batch_sizes = [1, 5, 10, 15, 20, 30, 50, 75, 100]
     # batch_sizes = [30]
     global DURATION
 
