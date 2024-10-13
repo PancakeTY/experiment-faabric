@@ -40,14 +40,14 @@ CUTTING_LINE = "----------------------------------------------------------------
 CURRENT_DATE = datetime.now().strftime("%Y-%m-%d")
 # Mutable
 DURATION = 600
-INPUT_BATCHSIZE = 300
+INPUT_BATCHSIZE = 20
 NUM_INPUT_THREADS = 10
 INPUT_FILE = 'tasks/stream/data/books.txt'
 INPUT_MSG = {
     "user": "stream",
     "function": "wordcountindiv_split",
 }
-RESULT_FILE = 'tasks/stream/logs/my_wc_results-3.txt'
+RESULT_FILE = 'tasks/stream/logs/exp_wc_results.txt'
 INPUT_MAP = {"sentence": 0}
 
 def read_sentences_from_file(file_path):
@@ -72,17 +72,17 @@ def read_sentences_from_file(file_path):
     return sentences
 
 @task
-def run(ctx, scale=0, batchsize=0, concurrency=10, input_rate=None):
+def run(ctx, scale, batchsize, concurrency, inputbatch, input_rate, duration):
     """
     Test the 'wordcount' function with resource contention.
     Input rate unit: data/ second
     """
-    global INPUT_BATCHSIZE, INPUT_FILE, INPUT_MSG, DURATION, RESULT_FILE, INPUT_MAP
+    global INPUT_FILE, INPUT_MSG, RESULT_FILE, INPUT_MAP
     global NUM_INPUT_THREADS
-    write_string_to_log(RESULT_FILE, f"Input Rates:{input_rate}, Batchsize: {batchsize}, Concurrency: {concurrency}, Scale: {scale}\n")
+    write_string_to_log(RESULT_FILE, f"Input Rates:{input_rate}, Batchsize: {batchsize}, Concurrency: {concurrency}, InputBatch:{inputbatch}, Scale: {scale}\n")
 
     # Get records
-    records = read_sentences_from_file (INPUT_FILE)
+    records = read_sentences_from_file(INPUT_FILE)
     flush_workers()
     flush_scheduler()
     
@@ -112,7 +112,7 @@ def run(ctx, scale=0, batchsize=0, concurrency=10, input_rate=None):
 
     # Launch multiple threads
     start_time = time.time()
-    end_time = start_time + DURATION
+    end_time = start_time + duration
     print(f"Start time: {start_time}")
     print(f"End time: {end_time}")
     # Start the ThreadPoolExecutor
@@ -122,7 +122,7 @@ def run(ctx, scale=0, batchsize=0, concurrency=10, input_rate=None):
             batch_producer,
             records,
             atomic_count,
-            INPUT_BATCHSIZE,
+            inputbatch,
             INPUT_MAP,
             batch_queue,
             end_time,
@@ -139,7 +139,7 @@ def run(ctx, scale=0, batchsize=0, concurrency=10, input_rate=None):
                     appid_list,
                     appid_list_lock,
                     INPUT_MSG,
-                    INPUT_BATCHSIZE
+                    inputbatch
                 )
             )
             input_threads.append(thread)
@@ -168,9 +168,9 @@ def run(ctx, scale=0, batchsize=0, concurrency=10, input_rate=None):
     batches_result = load_app_results()
 
     get_result_end_time = time.time()
-    duration = get_result_end_time - get_result_start_time
-    print(f"Duration to get result: {duration}")
-    np_result_message, function_metrics = statistics_result(batches_result, DURATION)
+    fetch_result_duration = get_result_end_time - get_result_start_time
+    print(f"Duration to get result: {fetch_result_duration}")
+    np_result_message, function_metrics = statistics_result(batches_result, duration)
     print(np_result_message)
     write_string_to_log(RESULT_FILE, np_result_message)
 
@@ -181,67 +181,85 @@ def run(ctx, scale=0, batchsize=0, concurrency=10, input_rate=None):
             print(f"  Average {metric_name}: {int(average_metric_time)} μs")
     write_metrics_to_log(RESULT_FILE, function_metrics)
 
-
+# Experiment for overall performance
 @task
-def run_multiple_batches(ctx, scale=0):
+def overall_exp(ctx, scale=3):
     """
-    Run the 'test_contention' task with different batch sizes: 1, 5, 10, 15, 20, 30, 50, 75, 100.
+    Run the 'overall performance' experiments of wordcount application.
+    Basic setup: 
+    scale 3; batchsize 20; concurrency 10; inputbatch 20; 
+    input rates: 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 1100, 1200, 1300, 1400, 1500, 1600, 1700, 1800, 1900, 2000, 2100, 2200, 2300, 2400, 2500
+    runtime: 10 minutes or all the data are processed
     """
-    write_string_to_log(RESULT_FILE, CUTTING_LINE)
-
-    inputbatch = 300
-    concurrency = 10
-    batch_sizes = [1, 5, 10, 15, 20, 30, 50, 75, 100]
-    # batch_sizes = [30]
     global DURATION
 
-    for batchsize in batch_sizes:
-        timestamp = datetime.now().strftime("%d--%b--%Y %H:%M:%S")
-        start_message = f"{timestamp} Running with batchsize={batchsize}, concurrency={concurrency}, inputbatch={inputbatch}, scale={scale}, duration={DURATION}"   
-        write_string_to_log(RESULT_FILE, start_message)
-        # Call the test_contention task with the current batchsize
-        run(ctx, scale=scale, batchsize=batchsize)
-        print(f"Completed test_contention with batchsize: {batchsize}")
-
-    
-@task
-def run_multiple_cons(ctx, scale=0):
-    """
-    Run the 'test_contention' task with different cons: 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 30, 50
-    """
     write_string_to_log(RESULT_FILE, CUTTING_LINE)
-
-    inputbatch = 300
-    concurrencies = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 30, 50]
-    batchsize = 30
-    global DURATION
-
-    for concurrency in concurrencies:
-        timestamp = datetime.now().strftime("%d--%b--%Y %H:%M:%S")
-        start_message = f"{timestamp} Running with batchsize={batchsize}, concurrency={concurrency}, inputbatch={inputbatch}, scale={scale}, duration={DURATION}"   
-        write_string_to_log(RESULT_FILE, start_message)
-        # Call the test_contention task with the current batchsize
-        run(ctx, scale=scale, batchsize=batchsize, concurrency=concurrency)
-        print(f"Completed test_contention with con: {concurrency}")
-
-@task
-def run_multiple_rates(ctx, scale=0):
-    """
-    Run the 'test_contention' task with different rates: 1200, 3000, 6000, 9000, 12000
-    """
-    write_string_to_log(RESULT_FILE, CUTTING_LINE)
-
-    inputbatch = 300
+    inputbatch = 20
     concurrency = 10
     batchsize = 20
-    rates = [300, 600, 900]
-    # rates = [1200] 
-    global DURATION
+    rates = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 1100, 1200, 1300, 1400, 1500, 1600, 1700, 1800, 1900, 2000, 2100, 2200, 2300, 2400, 2500]
 
     for rate in rates:
         timestamp = datetime.now().strftime("%d--%b--%Y %H:%M:%S")
         start_message = f"{timestamp} Running with rate={rate}, batchsize={batchsize}, concurrency={concurrency}, inputbatch={inputbatch}, scale={scale}, duration={DURATION}"   
         write_string_to_log(RESULT_FILE, start_message)
         # Call the test_contention task with the current batchsize
-        run(ctx, scale=scale, batchsize=batchsize, concurrency=concurrency, input_rate = rate)
+        run(ctx, scale=scale, batchsize=batchsize, concurrency=concurrency, inputbatch=inputbatch, input_rate=rate, duration=DURATION)
         print(f"Completed test_contention with con: {concurrency}")
+
+# Experiment for different batch size performance
+@task
+def varied_batch_exp(ctx, scale=3):
+    """
+    Run the 'varied batch size' experiment with different batchsize and different input rates
+    Basic setup:
+    scale 3; concurrency 10; inputbatch 20;
+    batchsize: 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 30
+    input rates: 1000, 1200, 1400, 1600, 1800, 2000
+    runtime: 10 minutes or all the data are processed
+    """
+    global DURATION
+
+    write_string_to_log(RESULT_FILE, CUTTING_LINE)
+    inputbatch = 20
+    concurrency = 10
+    batchsize_list = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 30]
+    rates = [1000, 1200, 1400, 1600, 1800, 2000]
+
+    for batchsize in batchsize_list:
+        for rate in rates:
+            timestamp = datetime.now().strftime("%d--%b--%Y %H:%M:%S")
+            start_message = f"{timestamp} Running with rate={rate}, batchsize={batchsize}, concurrency={concurrency}, inputbatch={inputbatch}, scale={scale}, duration={DURATION}"   
+            write_string_to_log(RESULT_FILE, start_message)
+            # Call the test_contention task with the current batchsize
+            run(ctx, scale=scale, batchsize=batchsize, concurrency=concurrency, inputbatch=inputbatch, input_rate=rate, duration=DURATION)
+            print(f"Completed test_contention with con: {concurrency}")
+
+# Experiment for different scale performance
+@task
+def varied_para_exp(ctx, scale=3):
+    """
+    Run the 'varied parallelism' experiment with different parallelism and different input rates
+    Basic setup:
+    batchsize 20; concurrency 10; inputbatch 20;
+    scale 1, 2, 3;
+    input rates: 1000, 1100, 1200, 1300, 1400, 1500
+    runtime: 10 minutes or all the data are processed
+    """
+    global DURATION
+
+    write_string_to_log(RESULT_FILE, CUTTING_LINE)
+    inputbatch = 20
+    concurrency = 10
+    batchsize = 20
+    rates = [1000, 1100, 1200, 1300, 1400, 1500]
+    scale_list = [1, 2, 3]
+
+    for scale in scale_list:
+        for rate in rates:
+            timestamp = datetime.now().strftime("%d--%b--%Y %H:%M:%S")
+            start_message = f"{timestamp} Running with rate={rate}, batchsize={batchsize}, concurrency={concurrency}, inputbatch={inputbatch}, scale={scale}, duration={DURATION}"   
+            write_string_to_log(RESULT_FILE, start_message)
+            # Call the test_contention task with the current batchsize
+            run(ctx, scale=scale, batchsize=batchsize, concurrency=concurrency, inputbatch=inputbatch, input_rate=rate, duration=DURATION)
+            print(f"Completed test_contention with con: {concurrency}")
