@@ -1,12 +1,12 @@
 import time
 import threading
 from datetime import datetime
-from collections import defaultdict
 from invoke import task
-import concurrent.futures
-import json
 from queue import Queue
 from concurrent.futures import ThreadPoolExecutor
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 # Utility imports for Faasm and task management
 from faasmctl.util.flush import flush_workers, flush_scheduler
@@ -24,41 +24,40 @@ from tasks.util.file import copy_outout, load_app_results, read_data_from_txt_fi
 
 # Custom utility functions
 from tasks.util.faasm import (
-    get_faasm_exec_chained_milli_time_from_json,
-    get_faasm_metrics_from_json,
     post_async_batch_msg,
     write_metrics_to_log,
     write_string_to_log,
-    async_invoke_thread,
     generate_input_data,
     statistics_result,
 )
+
+from tasks.util.stats import extract_data
 
 # Static
 CUTTING_LINE = "-------------------------------------------------------------------------------"
 CURRENT_DATE = datetime.now().strftime("%Y-%m-%d")
 # Mutable
 DURATION = 600
-INPUT_BATCHSIZE = 300
+INPUT_BATCHSIZE = 20
 NUM_INPUT_THREADS = 10
 INPUT_FILE = 'tasks/stream/data/data_sensor_sorted.txt'
 INPUT_MSG = {
     "user": "stream",
     "function": "sd_moving_avg",
 }
-RESULT_FILE = 'tasks/stream/logs/my_sd_results-2.txt'
+RESULT_FILE = 'tasks/stream/logs/exp_sd_results_cons_new.txt'
 INPUT_MAP = {"partitionedAttribute": 3, "temperature": 4}
 
 @task
-def run(ctx, scale=0, batchsize=0, concurrency=10, input_rate=2000):
+def run(ctx, scale, batchsize, concurrency, inputbatch, input_rate, duration):
     """
     Test the 'wordcount' function with resource contention.
     Input rate unit: data/ second
     """
-    global INPUT_BATCHSIZE, INPUT_FILE, INPUT_MSG, DURATION, RESULT_FILE, INPUT_MAP
+    global INPUT_FILE, INPUT_MSG, RESULT_FILE, INPUT_MAP
     global NUM_INPUT_THREADS
-    write_string_to_log(RESULT_FILE, f"Input Rates:{input_rate}, Batchsize: {batchsize}, Concurrency: {concurrency}, Scale: {scale}\n")
-
+    write_string_to_log(RESULT_FILE, f"Input Rates:{input_rate}, Batchsize: {batchsize}, Concurrency: {concurrency}, InputBatch:{inputbatch}, Scale: {scale}\n")
+    
     # Get records
     records = read_data_from_txt_file(INPUT_FILE)
     flush_workers()
@@ -90,7 +89,7 @@ def run(ctx, scale=0, batchsize=0, concurrency=10, input_rate=2000):
 
     # Launch multiple threads
     start_time = time.time()
-    end_time = start_time + DURATION
+    end_time = start_time + duration
     print(f"Start time: {start_time}")
     print(f"End time: {end_time}")
     # Start the ThreadPoolExecutor
@@ -100,7 +99,7 @@ def run(ctx, scale=0, batchsize=0, concurrency=10, input_rate=2000):
             batch_producer,
             records,
             atomic_count,
-            INPUT_BATCHSIZE,
+            inputbatch,
             INPUT_MAP,
             batch_queue,
             end_time,
@@ -117,7 +116,7 @@ def run(ctx, scale=0, batchsize=0, concurrency=10, input_rate=2000):
                     appid_list,
                     appid_list_lock,
                     INPUT_MSG,
-                    INPUT_BATCHSIZE
+                    inputbatch
                 )
             )
             input_threads.append(thread)
@@ -146,9 +145,9 @@ def run(ctx, scale=0, batchsize=0, concurrency=10, input_rate=2000):
     batches_result = load_app_results()
 
     get_result_end_time = time.time()
-    duration = get_result_end_time - get_result_start_time
-    print(f"Duration to get result: {duration}")
-    np_result_message, function_metrics = statistics_result(batches_result, DURATION)
+    fetch_result_duration = get_result_end_time - get_result_start_time
+    print(f"Duration to get result: {fetch_result_duration}")
+    np_result_message, function_metrics = statistics_result(batches_result, duration)
     print(np_result_message)
     write_string_to_log(RESULT_FILE, np_result_message)
 
@@ -160,66 +159,91 @@ def run(ctx, scale=0, batchsize=0, concurrency=10, input_rate=2000):
     write_metrics_to_log(RESULT_FILE, function_metrics)
 
 
+# Experiment for overall performance
 @task
-def run_multiple_batches(ctx, scale=0):
+def overall_exp(ctx, scale=3):
     """
-    Run the 'test_contention' task with different batch sizes: 1, 5, 10, 15, 20, 30, 50, 75, 100.
+    Run the 'overall performance' experiments of spike detection application.
+    Basic setup: 
+    scale 3; batchsize 20; concurrency 10; inputbatch 20; 
+    input rates: 1000, 2000, 3000, 4000, 6000, 8000, 10000, 12000
+    runtime: 10 minutes or all the data are processed
     """
-    write_string_to_log(RESULT_FILE, CUTTING_LINE)
-
-    inputbatch = 300
-    concurrency = 10
-    batch_sizes = [1, 5, 10, 15, 20, 30, 50, 75, 100]
-    # batch_sizes = [30]
     global DURATION
 
-    for batchsize in batch_sizes:
-        timestamp = datetime.now().strftime("%d--%b--%Y %H:%M:%S")
-        start_message = f"{timestamp} Running with batchsize={batchsize}, concurrency={concurrency}, inputbatch={inputbatch}, scale={scale}, duration={DURATION}"   
-        write_string_to_log(RESULT_FILE, start_message)
-        # Call the test_contention task with the current batchsize
-        run(ctx, scale=scale, batchsize=batchsize)
-        print(f"Completed test_contention with batchsize: {batchsize}")
-
-    
-@task
-def run_multiple_cons(ctx, scale=0):
-    """
-    Run the 'test_contention' task with different cons: 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 30, 50
-    """
     write_string_to_log(RESULT_FILE, CUTTING_LINE)
-
-    inputbatch = 300
-    concurrencies = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 30, 50]
-    batchsize = 30
-    global DURATION
-
-    for concurrency in concurrencies:
-        timestamp = datetime.now().strftime("%d--%b--%Y %H:%M:%S")
-        start_message = f"{timestamp} Running with batchsize={batchsize}, concurrency={concurrency}, inputbatch={inputbatch}, scale={scale}, duration={DURATION}"   
-        write_string_to_log(RESULT_FILE, start_message)
-        # Call the test_contention task with the current batchsize
-        run(ctx, scale=scale, batchsize=batchsize, concurrency=concurrency)
-        print(f"Completed test_contention with con: {concurrency}")
-
-@task
-def run_multiple_rates(ctx, scale=0):
-    """
-    Run the 'test_contention' task with different rates: 1200, 3000, 6000, 9000, 12000
-    """
-    write_string_to_log(RESULT_FILE, CUTTING_LINE)
-
-    inputbatch = 300
+    inputbatch = 20
     concurrency = 10
     batchsize = 20
-    # rates = [1200, 3000, 6000, 9000, 12000]
-    rates = [15000] 
-    global DURATION
+    rates = [1000, 2000, 3000, 4000, 6000, 8000, 10000, 12000]
 
     for rate in rates:
         timestamp = datetime.now().strftime("%d--%b--%Y %H:%M:%S")
         start_message = f"{timestamp} Running with rate={rate}, batchsize={batchsize}, concurrency={concurrency}, inputbatch={inputbatch}, scale={scale}, duration={DURATION}"   
         write_string_to_log(RESULT_FILE, start_message)
         # Call the test_contention task with the current batchsize
-        run(ctx, scale=scale, batchsize=batchsize, concurrency=concurrency, input_rate = rate)
+        run(ctx, scale=scale, batchsize=batchsize, concurrency=concurrency, inputbatch=inputbatch, input_rate=rate, duration=DURATION)
         print(f"Completed test_contention with con: {concurrency}")
+
+# Experiment for different concurrency
+@task
+def varied_con_exp(ctx, scale=1):
+    """
+    Run the 'varied concurrency' experiments of spike detection application.
+    Basic setup: 
+    scale 1; batchsize 30; inputbatch 20; 
+    input rates: 3000
+    concurrency: 1, 2, 3, 4, 5
+    runtime: 10 minutes or all the data are processed
+    """
+    global DURATION
+    global RESULT_FILE
+
+    RESULT_FILE = 'tasks/stream/logs/exp_sd_cons.txt'
+    write_string_to_log(RESULT_FILE, CUTTING_LINE)
+    write_string_to_log(RESULT_FILE, "experiment result: varied_con_exp")
+
+    inputbatch = 300
+    concurrency_list = [1, 2, 3, 4, 5]
+    batchsize = 30
+    rates = [3000]
+    # rates = [1000, 2000, 3000, 4000]
+
+    for concurrency in concurrency_list:
+        for rate in rates:
+            timestamp = datetime.now().strftime("%d--%b--%Y %H:%M:%S")
+            start_message = f"{timestamp} Running with rate={rate}, batchsize={batchsize}, concurrency={concurrency}, inputbatch={inputbatch}, scale={scale}, duration={DURATION}"   
+            write_string_to_log(RESULT_FILE, start_message)
+            # Call the test_contention task with the current batchsize
+            run(ctx, scale=scale, batchsize=batchsize, concurrency=concurrency, inputbatch=inputbatch, input_rate=rate, duration=DURATION)
+            print(f"Completed test_contention with con: {concurrency}")
+
+@task
+def varied_con_plot(ctx):
+    """
+    Plot the 'varied concurrency' experiment
+    """
+    data = extract_data("tasks/stream/logs/exp_sd_results_cons_new.txt")
+    df = pd.DataFrame(data)
+    print(df)
+    df['Input Rate'] = df['Input Rate'].astype(int)
+    df['Concurrency'] = df['Concurrency'].astype(int)
+    df['Average Duration (µs)'] = df['Average Duration (µs)'].astype(float)
+
+    sns.set(style="whitegrid")
+
+    plt.figure(figsize=(10, 6))
+    sns.lineplot(
+        data=df,
+        x="Input Rate",
+        y="Average Duration (µs)",
+        hue="Concurrency",
+        marker="o",
+    )
+    plt.title("Input Rate vs Average Duration (µs)")
+    plt.xlabel("Input Rate")
+    plt.ylabel("Average Duration (µs)")
+    plt.legend(title="Concurrency")
+    plt.savefig("tasks/stream/figure/sd_con_plot.png")
+    plt.close()  # Close the figure to prevent overlap
+

@@ -393,12 +393,12 @@ def statistics_result(batches_result, DURATION):
     duration = max_finish_ts - min_start_ts
     np_result_message = (
                 "Numpy result: \n"
-                f"Total messages sent: {len(actual_times_array)},\n"
+                f"Total messages processed: {len(actual_times_array)},\n"
                 f"Average actual time: {np_average_time} ms,\n"
                 f"Median actual time: {np_median_time} ms,\n"
                 f"99th percentile actual time: {np_percentile_99_time} ms,\n"
                 f"95th percentile actual time: {np_percentile_95_time} ms,\n"
                 f"Start timestamp: {min_start_ts}\n"
                 f"Finish timestamp: {max_finish_ts}\n"
-                f"Duration: {duration} ms\n")
+                f"Actual Duration: {duration} ms\n")
     return np_result_message, function_metrics

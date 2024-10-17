@@ -28,21 +28,26 @@ def batch_producer(records, atomic_count, input_batchsize, input_map, batch_queu
         if sleep_time > 0:
             time.sleep(sleep_time)
             now = time.time()  # Update now after sleeping
-
+        
+        break_flag = False
         # Produce batches until we're back on schedule
         while now >= next_batch_time:
             input_index = atomic_count.get_and_increment(input_batchsize)
             if input_index + input_batchsize >= len(records):
+                break_flag = True
                 break
-            input_data = generate_input_data(records, input_index, input_batchsize, input_map)
+            input_data_list = generate_input_data(records, input_index, input_batchsize, input_map)
             chained_id_list = [input_index + i for i in range(input_batchsize)]
             # Put batch data into queue
-            batch_queue.put((input_index, input_data, chained_id_list))
+            batch_queue.put((input_index, input_data_list, chained_id_list))
             total_items_produced += input_batchsize
             # Update next_batch_time for the next batch
             next_batch_time += batch_interval
             # Update now to reflect the current time after processing
             now = time.time()
+
+        if break_flag:
+            break
 
     # After production is done, signal consumers to exit
     for _ in range(num_consumers):

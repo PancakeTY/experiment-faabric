@@ -1,13 +1,13 @@
 import time
 import threading
 from datetime import datetime
-from collections import defaultdict
 from invoke import task
 import re
-import concurrent.futures
-import json
 from queue import Queue
 from concurrent.futures import ThreadPoolExecutor
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 # Utility imports for Faasm and task management
 from faasmctl.util.flush import flush_workers, flush_scheduler
@@ -25,15 +25,14 @@ from tasks.util.file import copy_outout, load_app_results
 
 # Custom utility functions
 from tasks.util.faasm import (
-    get_faasm_exec_chained_milli_time_from_json,
-    get_faasm_metrics_from_json,
     post_async_batch_msg,
     write_metrics_to_log,
     write_string_to_log,
-    async_invoke_thread,
     generate_input_data,
     statistics_result,
 )
+
+from tasks.util.stats import extract_data
 
 # Static
 CUTTING_LINE = "-------------------------------------------------------------------------------"
@@ -47,7 +46,7 @@ INPUT_MSG = {
     "user": "stream",
     "function": "wordcountindiv_split",
 }
-RESULT_FILE = 'tasks/stream/logs/exp_wc_results.txt'
+RESULT_FILE = 'tasks/stream/logs/exp_wc_para.txt'
 INPUT_MAP = {"sentence": 0}
 
 def read_sentences_from_file(file_path):
@@ -249,10 +248,12 @@ def varied_para_exp(ctx, scale=3):
     global DURATION
 
     write_string_to_log(RESULT_FILE, CUTTING_LINE)
+    write_string_to_log(RESULT_FILE, "experiment result: varied parallelism")
+
     inputbatch = 20
     concurrency = 10
     batchsize = 20
-    rates = [1000, 1100, 1200, 1300, 1400, 1500]
+    rates = [1200, 1300, 1400, 1500, 1600, 1700, 1800, 2000]
     scale_list = [1, 2, 3]
 
     for scale in scale_list:
@@ -263,3 +264,68 @@ def varied_para_exp(ctx, scale=3):
             # Call the test_contention task with the current batchsize
             run(ctx, scale=scale, batchsize=batchsize, concurrency=concurrency, inputbatch=inputbatch, input_rate=rate, duration=DURATION)
             print(f"Completed test_contention with con: {concurrency}")
+
+@task
+def varied_para_plot(ctx):
+    """
+    Plot the 'varied parallelism' experiment
+    """
+    # data = extract_data("tasks/stream/logs/exp_wc_para.txt")
+    data = extract_data("tasks/stream/logs/temp.txt")
+    df = pd.DataFrame(data)
+    print(df)
+
+    df['Input Rate'] = df['Input Rate'].astype(int)
+    df['Scale'] = df['Scale'].astype(int)
+    df['99th Percentile Actual Time (ms)'] = df['99th Percentile Actual Time (ms)'].astype(float)
+
+    sns.set(style="whitegrid")
+
+    # Plot 1: Input Rate vs 99th Percentile Actual Time
+    plt.figure(figsize=(10, 6))
+    sns.lineplot(
+        data=df,
+        x="Input Rate",
+        y="99th Percentile Actual Time (ms)",
+        hue="Scale",
+        marker="o",
+    )
+    plt.title("Input Rate vs 99th Percentile Actual Time")
+    plt.xlabel("Input Rate")
+    plt.ylabel("99th Percentile Actual Time (ms)")
+    plt.legend(title="Scale")
+    plt.savefig("tasks/stream/figure/wc_para_plot.png")
+    plt.close()  # Close the figure to prevent overlap
+
+# Experiment for latency performance
+@task
+def latency_exp(ctx, scale=3):
+    """
+    Run the 'latency' experiments of wordcount application.
+    Basic setup: 
+    batchsize 1; concurrency 10; inputbatch 1; 
+    input rates: 1
+    scale: 1, 3
+    runtime: 10 minutes or all the data are processed
+    """
+    global DURATION
+
+    write_string_to_log(RESULT_FILE, CUTTING_LINE)
+    write_string_to_log(RESULT_FILE, "experiment result: latency_exp")
+
+    inputbatch = 1
+    concurrency = 10
+    batchsize = 1
+    rates = [1]
+    scale_list = [1, 3]
+
+    for scale in scale_list:
+        for rate in rates:
+            timestamp = datetime.now().strftime("%d--%b--%Y %H:%M:%S")
+            start_message = f"{timestamp} Running with rate={rate}, batchsize={batchsize}, concurrency={concurrency}, inputbatch={inputbatch}, scale={scale}, duration={DURATION}"   
+            write_string_to_log(RESULT_FILE, start_message)
+            # Call the test_contention task with the current batchsize
+            run(ctx, scale=scale, batchsize=batchsize, concurrency=concurrency, inputbatch=inputbatch, input_rate=rate, duration=DURATION)
+            print(f"Completed test_contention with con: {concurrency}")
+
+

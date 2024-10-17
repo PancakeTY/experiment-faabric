@@ -2,7 +2,7 @@ import time
 from collections import defaultdict
 from invoke import task
 from faasmctl.util.flush import flush_workers, flush_scheduler
-from faasmctl.util.planner import reset_batch_size, scale_function_parallelism, register_function_state,reset_max_replicas
+from faasmctl.util.planner import reset_batch_size, scale_function_parallelism, register_function_state,reset_max_replicas, reset_max_replicas
 from faasmctl.util.invoke import query_result
 import concurrent.futures
 import threading
@@ -33,16 +33,17 @@ def read_data_from_file(file_path):
 
 current_date = datetime.now().strftime("%Y-%m-%d")
 DURATION = 600
+CONCURRENCY = 10
 INPUT_FILE = 'tasks/stream/data/data_sensor_sorted.txt'
 INPUT_MSG = {
     "user": "stream",
     "function": "sd_moving_avg",
 }
 OUTPUT_FILE = f"tasks/stream/results/{current_date}/sd_exp.txt"
-RESULT_FILE = 'tasks/stream/logs/my_sd_results.txt'
+RESULT_FILE = 'tasks/stream/logs/my_sd_results-1.txt'
 
 @task
-def run(ctx, scale=0, batchsize=0):
+def run(ctx, scale=0, batchsize=0, concurrency=10):
     """
     Test the 'wordcount' function with resource contention.
     """
@@ -51,7 +52,6 @@ def run(ctx, scale=0, batchsize=0):
     global DURATION
     global OUTPUT_FILE
     global RESULT_FILE
-
     records = read_data_from_file(INPUT_FILE)
     records_len = len(records)
 
@@ -73,8 +73,9 @@ def run(ctx, scale=0, batchsize=0):
 
     if batchsize > 0:
         reset_batch_size(batchsize)
-
-    reset_max_replicas(10)
+    
+    if concurrency > 0:
+        reset_max_replicas(concurrency)
 
     atomic_count = AtomicInteger(1)
 
@@ -86,7 +87,7 @@ def run(ctx, scale=0, batchsize=0):
 
     appid_list_lock = threading.Lock()
 
-    num_input_threads = 5
+    num_input_threads = 10
     input_threads = []
     # Launch multiple threads
     start_time = time.time()
@@ -99,9 +100,10 @@ def run(ctx, scale=0, batchsize=0):
         input_threads.append(thread)
         thread.start()
     
-    time.sleep(2)
+    for thread in input_threads:
+        thread.join()
 
-    num_output_threads = 5
+    num_output_threads = 20
     output_threads = []
     batches_result = []
     shared_batches_min_start_ts = [None]
@@ -114,9 +116,6 @@ def run(ctx, scale=0, batchsize=0):
         output_threads.append(thread)
         thread.start()
     
-    for thread in input_threads:
-        thread.join()
-
     for thread in output_threads:
         thread.join()
 
@@ -171,7 +170,7 @@ def run(ctx, scale=0, batchsize=0):
             average_metric_time = sum(times) / len(times) if times else 0
             print(f"  Average {metric_name}: {int(average_metric_time)} μs")
     write_string_to_log(RESULT_FILE, np_result_message)
-    write_metrics_to_log(RESULT_FILE, batchsize, 10, 300, len(actual_times_array), np_average_time, function_metrics)
+    write_metrics_to_log(RESULT_FILE, batchsize, concurrency, 300, len(actual_times_array), np_average_time, function_metrics)
     write_string_to_log(OUTPUT_FILE, "end")
 
 
@@ -195,3 +194,28 @@ def run_multiple_batches(ctx, scale=0):
         # Call the test_contention task with the current batchsize
         run(ctx, scale=scale, batchsize=batchsize)
         print(f"Completed test_contention with batchsize: {batchsize}")
+
+    
+@task
+def run_multiple_cons(ctx, scale=0):
+    """
+    Run the 'test_contention' task with different cons: 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 30, 50
+    """
+    inputbatch = 300
+    concurrencies = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 30, 50]
+    batchsize = 30
+    global OUTPUT_FILE
+    global DURATION
+
+    OUTPUT_FILE = f"tasks/stream/results/sd/{current_date}/sd_batches.txt"
+    for concurrency in concurrencies:
+        CONCURRENCY = concurrency
+        timestamp = datetime.now().strftime("%d--%b--%Y %H:%M:%S")
+        start_message = f"{timestamp} Running with batchsize={batchsize}, concurrency={concurrency}, inputbatch={inputbatch}, scale={scale}, duration={DURATION}"   
+        write_string_to_log(RESULT_FILE, start_message)
+        write_string_to_log(OUTPUT_FILE, start_message)
+        # Call the test_contention task with the current batchsize
+        run(ctx, scale=scale, batchsize=batchsize, concurrency=concurrency)
+        print(f"Completed test_contention with con: {concurrency}")
+
+    
