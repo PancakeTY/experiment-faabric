@@ -165,6 +165,9 @@ def get_faasm_metrics_from_json(json_result, deadline):
         input_match = re.search(r'input_size: (\d+)', output_data)
         if input_match:
             input_size = int(input_match.group(1))
+        avg_tuple_duration = None
+        if match and input_match and (input_size != 0):
+            avg_tuple_duration = float(duration / input_size)
 
         function_name = "unknown"
         if msg_result.get('parallelismId') is not None:
@@ -187,7 +190,9 @@ def get_faasm_metrics_from_json(json_result, deadline):
             function_metrics[function_name]['duration'].append(duration)
         if input_size is not None:
             function_metrics[function_name]['input_size'].append(input_size)    
-    
+        if avg_tuple_duration is not None:
+            function_metrics[function_name]['avg_tuple_duration'].append(avg_tuple_duration)    
+
     if msg_start_ts is not None and msg_finish_ts is not None:
         function_metrics["application"]["msg_latency"].append((msg_finish_ts - msg_start_ts) * 1000)
 

@@ -56,7 +56,7 @@ def batch_producer(records, atomic_count, input_batchsize, input_map, batch_queu
     return total_items_produced
 
 
-def batch_consumer(batch_queue, appid_list, appid_list_lock, INPUT_MSG, input_batchsize):
+def batch_consumer(batch_queue, appid_list, appid_list_lock, INPUT_MSG, input_batchsize, end_time):
     while True:
         batch_data = batch_queue.get()  # Blocking call, waits indefinitely
         if batch_data is None:
@@ -71,3 +71,8 @@ def batch_consumer(batch_queue, appid_list, appid_list_lock, INPUT_MSG, input_ba
             with appid_list_lock:
                 appid_list.append(appid_return)
         batch_queue.task_done()
+
+        # If the end time is reached, return.
+        now = time.time()
+        if now > end_time + 1:
+            break

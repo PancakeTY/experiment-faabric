@@ -1,143 +1,225 @@
 import time
+import threading
+from datetime import datetime
 from collections import defaultdict
 from invoke import task
-from faasmctl.util.flush import flush_workers, flush_scheduler
-from faasmctl.util.planner import reset_batch_size, scale_function_parallelism
-from faasmctl.util.invoke import query_result
 import concurrent.futures
-from google.protobuf.json_format import MessageToDict
-import threading
-import csv
+import json
+from queue import Queue
+from concurrent.futures import ThreadPoolExecutor
 
+# Utility imports for Faasm and task management
+from faasmctl.util.flush import flush_workers, flush_scheduler
+from faasmctl.util.planner import (
+    reset_batch_size, scale_function_parallelism, 
+    register_function_state, reset_max_replicas, output_result
+)
+from faasmctl.util.invoke import query_result
+from tasks.util.thread import (
+    AtomicInteger,
+    batch_producer,
+    batch_consumer,
+)
+from tasks.util.file import copy_outout, load_app_results, read_data_from_txt_file
+
+# Custom utility functions
 from tasks.util.faasm import (
+    get_faasm_exec_chained_milli_time_from_json,
     get_faasm_metrics_from_json,
     post_async_batch_msg,
+    write_metrics_to_log,
+    write_string_to_log,
+    async_invoke_thread,
+    generate_input_data,
+    statistics_result,
 )
 
-def read_data_from_file(file_path):
-    records = []
-    with open(file_path, 'r') as file:  # Open the file
-        reader = csv.reader(file)
-        for data in reader:
-            records.append(data)
-    return records
-
-# Helper function to generate input data ranges
-# machine_id, time_stamp, cpu, mem
-def generate_input_data(records, start, end):
-    return [{"machineId": record[0].split('_')[1], 
-             "cpu": record[2], 
-             "mem": record[3], 
-             "timestamp": record[1]} for record in records[start:end + 1]]
+# Static
+CUTTING_LINE = "-------------------------------------------------------------------------------"
+CURRENT_DATE = datetime.now().strftime("%Y-%m-%d")
+# Mutable
+DURATION = 600
+INPUT_BATCHSIZE = 300
+NUM_INPUT_THREADS = 10
+INPUT_FILE = 'tasks/stream/data/data_sensor_sorted.txt'
+INPUT_MSG = {
+    "user": "stream",
+    "function": "sd_moving_avg",
+}
+RESULT_FILE = 'tasks/stream/logs/my_sd_results-2.txt'
+INPUT_MAP = {"partitionedAttribute": 3, "temperature": 4}
 
 @task
-def test_contention(ctx, scale=1, batchsize=50):
+def run(ctx, scale=0, batchsize=0, concurrency=10, input_rate=2000):
     """
-    Test the 'machine outlier' function with resource contention.
+    Test the 'wordcount' function with resource contention.
+    Input rate unit: data/ second
     """
-    file_path = 'tasks/stream/data/machine_usage.csv'
-    records = read_data_from_file(file_path)
-    records_len = len(records)
+    global INPUT_BATCHSIZE, INPUT_FILE, INPUT_MSG, DURATION, RESULT_FILE, INPUT_MAP
+    global NUM_INPUT_THREADS
+    write_string_to_log(RESULT_FILE, f"Input Rates:{input_rate}, Batchsize: {batchsize}, Concurrency: {concurrency}, Scale: {scale}\n")
 
+    # Get records
+    records = read_data_from_txt_file(INPUT_FILE)
     flush_workers()
     flush_scheduler()
-
-    msg = {
-        "user": "stream",
-        "function": "mo_score",
-    }
-
-    register_function_state("mo_", "partitionedAttribute", "partitionStateKey")
-    register_function_state("run_mo", "partitionedAttribute", "partitionStateKey")
-    register_function_state("run_mo", "partitionedAttribute", "partitionStateKey")
-
-    input_data = generate_input_data(records, 0, 0)
-    appid = 1
-    print(input_data)
-    appid = post_async_batch_msg(appid, msg, 1, input_data)
+    
+    register_function_state("stream_sd_moving_avg", "partitionedAttribute", "partitionStateKey")
+    
+    # Run one request at begining
+    input_data = generate_input_data(records, 0, 1, INPUT_MAP)
+    appid = post_async_batch_msg(100000, INPUT_MSG, batch_size = 1, input_list = input_data, chained_id_list = [1])
     query_result(appid)
 
-    # if scale > 1:
-    #     scale_function_parallelism("stream", "wordcount_countindiv" ,scale)
+    # Adjust the parameters
+    if scale > 1:
+        scale_function_parallelism("stream", "sd_moving_avg" ,scale)
 
-    # if batchsize > 0:
-    #     reset_batch_size(batchsize)
-
-    limit_time = 10
-
-    appid = 100000
-    appid_list = []
+    if batchsize > 0:
+        reset_batch_size(batchsize)
     
+    if concurrency > 0:
+        reset_max_replicas(concurrency)
+
+    atomic_count = AtomicInteger(1)
+    appid_list = []
+    appid_list_lock = threading.Lock()
+    input_threads = []
+    
+    batch_queue = Queue()
+
+    # Launch multiple threads
     start_time = time.time()
-    end_time = start_time + limit_time
-    batch_start = 0
-    batch_size = 100
+    end_time = start_time + DURATION
+    print(f"Start time: {start_time}")
+    print(f"End time: {end_time}")
+    # Start the ThreadPoolExecutor
+    with ThreadPoolExecutor() as executor:
+        # Submit the batch_producer function to the executor
+        future = executor.submit(
+            batch_producer,
+            records,
+            atomic_count,
+            INPUT_BATCHSIZE,
+            INPUT_MAP,
+            batch_queue,
+            end_time,
+            input_rate,
+            NUM_INPUT_THREADS
+        )
 
-    # Invoke the function in batches
-    while time.time() < end_time and batch_start < records_len:
-        batch_end = min(batch_start + batch_size - 1, records_len - 1)
-        input_data = generate_input_data(records, batch_start, batch_end)
-        appid_return = post_async_batch_msg(appid, msg, batch_end - batch_start + 1, input_data)
-        if appid_return is not None:
-            appid_list.append(appid_return)
-            appid += 1
-        batch_start += batch_size
-        if batch_start + batch_size >= records_len -1:
-            batch_start = 0  # Restart from the beginning if the end is reached
+        # Start consumer threads
+        for _ in range(NUM_INPUT_THREADS):
+            thread = threading.Thread(
+                target=batch_consumer,
+                args=(
+                    batch_queue,
+                    appid_list,
+                    appid_list_lock,
+                    INPUT_MSG,
+                    INPUT_BATCHSIZE
+                )
+            )
+            input_threads.append(thread)
+            thread.start()
 
-    def get_result_thread(appid):
-        try:
-            ber_status = query_result(appid)
-            json_results = MessageToDict(ber_status)
-            print(f"Got result for appid {appid}")
-            return json_results["messageResults"]
-        except Exception as exc:
-            print(f"Generated an exception: {exc}")
-            return {}, defaultdict(lambda: defaultdict(list))
+        # Wait for the producer to finish and get the result
+        total_items_produced = future.result()
+        produce_messenger = f"Total items produced: {total_items_produced}"
+        print(produce_messenger)
+        write_string_to_log(RESULT_FILE, produce_messenger)
 
-    # unit second
-    total_count = 0
-    total_time = 0
-    function_metrics = defaultdict(lambda: defaultdict(list))
-    lock = threading.Lock()
-    batches_min_start_ts = None
+        # Wait for consumer threads to finish
+        for thread in input_threads:
+            thread.join()
 
-    print("get result and minimum start time")
-    batches_result = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-        futures = [executor.submit(get_result_thread, appid) for appid in appid_list]
-        for future in concurrent.futures.as_completed(futures):
-            # get the min_start_ts
-            try:
-                json_results = future.result()
-                start_ts = int(min([result_json["start_ts"] for result_json in json_results]))
+    # Get results from 
+    get_result_start_time = None
+    result_output = False
+    while not result_output:
+        get_result_start_time = time.time()
+        result_output = output_result()
+        time.sleep(5)
 
-                with lock:
-                    if batches_min_start_ts is None or start_ts < batches_min_start_ts:
-                        batches_min_start_ts = start_ts
-                batches_result.append(json_results)
+    # Copy the output file from container
+    copy_outout()
+    batches_result = load_app_results()
 
-            except Exception as exc:
-                print(f"Get minimum start time generated an exception: {exc}")
-    print(f"Minimum start time: {batches_min_start_ts}")
-
-    deadline = batches_min_start_ts + limit_time * 1000
-    print(f"Deadline: {deadline}")
-    for app_result in batches_result:
-        actual_times, app_metrics = get_faasm_metrics_from_json(app_result, deadline)
-        for actual_time in actual_times.values():
-            total_time += actual_time
-            total_count += 1
-        for func_name, metrics in app_metrics.items():
-            for metric_name, times in metrics.items():
-                function_metrics[func_name][metric_name].extend(times)
-
-    average_time = total_time / total_count if total_count > 0 else 0
-    print(f"Total messages sent: {total_count}")
-    print(f"Average actual time: {average_time} ms")
+    get_result_end_time = time.time()
+    duration = get_result_end_time - get_result_start_time
+    print(f"Duration to get result: {duration}")
+    np_result_message, function_metrics = statistics_result(batches_result, DURATION)
+    print(np_result_message)
+    write_string_to_log(RESULT_FILE, np_result_message)
 
     for func_name, metrics in function_metrics.items():
         print(f"Metrics for {func_name}:")
         for metric_name, times in metrics.items():
             average_metric_time = sum(times) / len(times) if times else 0
             print(f"  Average {metric_name}: {int(average_metric_time)} μs")
+    write_metrics_to_log(RESULT_FILE, function_metrics)
+
+
+@task
+def run_multiple_batches(ctx, scale=0):
+    """
+    Run the 'test_contention' task with different batch sizes: 1, 5, 10, 15, 20, 30, 50, 75, 100.
+    """
+    write_string_to_log(RESULT_FILE, CUTTING_LINE)
+
+    inputbatch = 300
+    concurrency = 10
+    batch_sizes = [1, 5, 10, 15, 20, 30, 50, 75, 100]
+    # batch_sizes = [30]
+    global DURATION
+
+    for batchsize in batch_sizes:
+        timestamp = datetime.now().strftime("%d--%b--%Y %H:%M:%S")
+        start_message = f"{timestamp} Running with batchsize={batchsize}, concurrency={concurrency}, inputbatch={inputbatch}, scale={scale}, duration={DURATION}"   
+        write_string_to_log(RESULT_FILE, start_message)
+        # Call the test_contention task with the current batchsize
+        run(ctx, scale=scale, batchsize=batchsize)
+        print(f"Completed test_contention with batchsize: {batchsize}")
+
+    
+@task
+def run_multiple_cons(ctx, scale=0):
+    """
+    Run the 'test_contention' task with different cons: 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 30, 50
+    """
+    write_string_to_log(RESULT_FILE, CUTTING_LINE)
+
+    inputbatch = 300
+    concurrencies = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 30, 50]
+    batchsize = 30
+    global DURATION
+
+    for concurrency in concurrencies:
+        timestamp = datetime.now().strftime("%d--%b--%Y %H:%M:%S")
+        start_message = f"{timestamp} Running with batchsize={batchsize}, concurrency={concurrency}, inputbatch={inputbatch}, scale={scale}, duration={DURATION}"   
+        write_string_to_log(RESULT_FILE, start_message)
+        # Call the test_contention task with the current batchsize
+        run(ctx, scale=scale, batchsize=batchsize, concurrency=concurrency)
+        print(f"Completed test_contention with con: {concurrency}")
+
+@task
+def run_multiple_rates(ctx, scale=0):
+    """
+    Run the 'test_contention' task with different rates: 1200, 3000, 6000, 9000, 12000
+    """
+    write_string_to_log(RESULT_FILE, CUTTING_LINE)
+
+    inputbatch = 300
+    concurrency = 10
+    batchsize = 20
+    rates = [1200, 3000, 6000, 9000, 12000]
+    # rates = [1200] 
+    global DURATION
+
+    for rate in rates:
+        timestamp = datetime.now().strftime("%d--%b--%Y %H:%M:%S")
+        start_message = f"{timestamp} Running with rate={rate}, batchsize={batchsize}, concurrency={concurrency}, inputbatch={inputbatch}, scale={scale}, duration={DURATION}"   
+        write_string_to_log(RESULT_FILE, start_message)
+        # Call the test_contention task with the current batchsize
+        run(ctx, scale=scale, batchsize=batchsize, concurrency=concurrency, input_rate = rate)
+        print(f"Completed test_contention with con: {concurrency}")

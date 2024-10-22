@@ -38,7 +38,6 @@ CUTTING_LINE = "----------------------------------------------------------------
 CURRENT_DATE = datetime.now().strftime("%Y-%m-%d")
 # Mutable
 DURATION = 600
-INPUT_BATCHSIZE = 20
 NUM_INPUT_THREADS = 10
 INPUT_FILE = 'tasks/stream/data/data_sensor_sorted.txt'
 INPUT_MSG = {
@@ -116,7 +115,8 @@ def run(ctx, scale, batchsize, concurrency, inputbatch, input_rate, duration):
                     appid_list,
                     appid_list_lock,
                     INPUT_MSG,
-                    inputbatch
+                    inputbatch,
+                    end_time,
                 )
             )
             input_threads.append(thread)
@@ -206,10 +206,70 @@ def varied_con_exp(ctx, scale=1):
     inputbatch = 300
     concurrency_list = [1, 2, 3, 4, 5]
     batchsize = 30
-    rates = [3000]
-    # rates = [1000, 2000, 3000, 4000]
-
+    rate = 3000
     for concurrency in concurrency_list:
+        timestamp = datetime.now().strftime("%d--%b--%Y %H:%M:%S")
+        start_message = f"{timestamp} Running with rate={rate}, batchsize={batchsize}, concurrency={concurrency}, inputbatch={inputbatch}, scale={scale}, duration={DURATION}"   
+        write_string_to_log(RESULT_FILE, start_message)
+        # Call the test_contention task with the current batchsize
+        run(ctx, scale=scale, batchsize=batchsize, concurrency=concurrency, inputbatch=inputbatch, input_rate=rate, duration=DURATION)
+        print(f"Completed test_contention with con: {concurrency}")
+
+@task
+def varied_con_plot(ctx):
+    """
+    Plot the 'varied concurrency' experiment
+    """
+    data = extract_data("tasks/stream/logs/exp_sd_cons.txt")
+    df = pd.DataFrame(data)
+
+    df_filter = pd.DataFrame()
+    df_filter['Concurrency'] = df['Concurrency'].astype(int)
+    df_filter['Average Tuple Duration (µs)'] = df['Average Tuple Duration (µs)'].astype(float)
+
+    df_avg = df_filter.groupby('Concurrency', as_index=False)['Average Tuple Duration (µs)'].mean()
+
+    plt.figure(figsize=(10, 6))
+    sns.set(style="whitegrid")
+    sns.lineplot(
+        data=df_avg,
+        x="Concurrency",
+        y="Average Tuple Duration (µs)",
+        marker="o",
+    )
+    plt.title("Concurrency vs Duration per Request (µs)")
+    plt.xlabel("Concurrency")
+    plt.ylabel("Duration per Request (µs)")
+    plt.xticks(ticks=range(df_avg['Concurrency'].min(), df_avg['Concurrency'].max() + 1))
+
+    plt.savefig("tasks/stream/figure/sd_con_duration.png")
+    plt.close()  # Close the figure to prevent overlap
+
+# Experiment for different batch size performance
+@task
+def varied_batch_exp(ctx, scale=3):
+    """
+    Run the 'varied batch size' experiment with different batchsize and different input rates
+    Basic setup:
+    scale 3; concurrency 10; inputbatch 20;
+    batchsize: 1, 5, 10, 15, 20, 30
+    input rates: 2000, 4000, 6000, 8000 (maximum throughput is about 4000)
+    runtime: 10 minutes or all the data are processed
+    """
+    global DURATION
+    global RESULT_FILE
+
+    RESULT_FILE = 'tasks/stream/logs/exp_sd_batch.txt'
+    write_string_to_log(RESULT_FILE, CUTTING_LINE)
+    write_string_to_log(RESULT_FILE, "experiment result: varied_batch_exp")
+    inputbatch = 20
+    concurrency = 10
+    batchsize_list = [30]
+    # batchsize_list = [1, 5, 10, 15, 20, 30]
+    # rates = [1000, 1500, 2000, 2500, 3000, 3500]
+    rates = [3000, 3500]
+
+    for batchsize in batchsize_list:
         for rate in rates:
             timestamp = datetime.now().strftime("%d--%b--%Y %H:%M:%S")
             start_message = f"{timestamp} Running with rate={rate}, batchsize={batchsize}, concurrency={concurrency}, inputbatch={inputbatch}, scale={scale}, duration={DURATION}"   
@@ -219,31 +279,137 @@ def varied_con_exp(ctx, scale=1):
             print(f"Completed test_contention with con: {concurrency}")
 
 @task
-def varied_con_plot(ctx):
+def varied_batch_plot(ctx):
     """
-    Plot the 'varied concurrency' experiment
+    Plot the 'varied batch size' experiment
     """
-    data = extract_data("tasks/stream/logs/exp_sd_results_cons_new.txt")
+
+    #unfinished
+    data = extract_data("tasks/stream/logs/exp_sd_batch.txt")
+
     df = pd.DataFrame(data)
-    print(df)
+    # Ensure that the data types are correct
     df['Input Rate'] = df['Input Rate'].astype(int)
-    df['Concurrency'] = df['Concurrency'].astype(int)
-    df['Average Duration (µs)'] = df['Average Duration (µs)'].astype(float)
+    df['Batch Size'] = df['Batch Size'].astype(int)
+    df['99th Percentile Actual Time (ms)'] = df['99th Percentile Actual Time (ms)'].astype(float)
 
     sns.set(style="whitegrid")
 
+    # Plot 1: Input Rate vs 99th Percentile Actual Time with a focused y-axis limit
     plt.figure(figsize=(10, 6))
     sns.lineplot(
         data=df,
         x="Input Rate",
-        y="Average Duration (µs)",
-        hue="Concurrency",
+        y="99th Percentile Actual Time (ms)",
+        hue="Batch Size",
         marker="o",
     )
-    plt.title("Input Rate vs Average Duration (µs)")
+    plt.ylim(0, 100)  # Adjust this limit as needed to show differences between other batch sizes
+    plt.title("Input Rate vs 99th Percentile Actual Time (Focused View)")
     plt.xlabel("Input Rate")
-    plt.ylabel("Average Duration (µs)")
-    plt.legend(title="Concurrency")
-    plt.savefig("tasks/stream/figure/sd_con_plot.png")
+    plt.ylabel("99th Percentile Actual Time (ms)")
+    plt.legend(title="Batch Size")
+    plt.savefig("tasks/stream/figure/sd_batch_latency_focused.png")
     plt.close()  # Close the figure to prevent overlap
 
+    # Plot 2: Input Rate vs Throughput
+    plt.figure(figsize=(10, 6))
+    sns.lineplot(
+        data=df,
+        x="Input Rate",
+        y="Throughput (msg/sec)",
+        hue="Batch Size",
+        marker="o",
+    )
+    plt.title("Input Rate vs Throughput")
+    plt.xlabel("Input Rate")
+    plt.ylabel("Throughput (msg/sec)")
+    plt.legend(title="Batch Size")
+    plt.savefig("tasks/stream/figure/sd_batch_throughput.png")
+    plt.close()
+
+
+# Experiment for different scale performance
+@task
+def varied_para_exp(ctx, scale=3):
+    """
+    Run the 'varied parallelism' experiment with different parallelism and different input rates
+    Basic setup:
+    batchsize 20; concurrency 10; inputbatch 20;
+    scale 1, 2, 3;
+    input rates: 1000, 2000, 3000, 4000, 5000
+    runtime: 10 minutes or all the data are processed
+    """
+    global DURATION
+    global RESULT_FILE
+
+
+    DURATION = 60
+    # RESULT_FILE = 'tasks/stream/logs/exp_sd_para.txt'
+    RESULT_FILE = 'tasks/stream/logs/temp.txt'
+    write_string_to_log(RESULT_FILE, CUTTING_LINE)
+    write_string_to_log(RESULT_FILE, "experiment result: varied parallelism")
+
+    inputbatch = 300
+    concurrency = 10
+    batchsize = 20
+    # rates = [1000, 2000, 3000, 4000, 5000, 10000, 12000, 14000]
+    rates = [6000, 8000]
+    # scale_list = [1, 2, 3]
+    scale_list = [2]
+
+    for scale in scale_list:
+        for rate in rates:
+            timestamp = datetime.now().strftime("%d--%b--%Y %H:%M:%S")
+            start_message = f"{timestamp} Running with rate={rate}, batchsize={batchsize}, concurrency={concurrency}, inputbatch={inputbatch}, scale={scale}, duration={DURATION}"   
+            write_string_to_log(RESULT_FILE, start_message)
+            # Call the test_contention task with the current batchsize
+            run(ctx, scale=scale, batchsize=batchsize, concurrency=concurrency, inputbatch=inputbatch, input_rate=rate, duration=DURATION)
+            print(f"Completed test_contention with con: {concurrency}")
+
+@task
+def varied_para_plot(ctx):
+    """
+    Plot the 'varied parallelism' experiment
+    """
+    data = extract_data("tasks/stream/logs/exp_sd_para.txt")
+    df = pd.DataFrame(data)
+    print(df)
+
+    df['Input Rate'] = df['Input Rate'].astype(int)
+    df['Scale'] = df['Scale'].astype(int)
+    df['99th Percentile Actual Time (ms)'] = df['99th Percentile Actual Time (ms)'].astype(float)
+    df['Throughput (msg/sec)'] = df['Throughput (msg/sec)'].astype(float)
+    sns.set(style="whitegrid")
+
+    # Plot 1: Input Rate vs 99th Percentile Actual Time
+    plt.figure(figsize=(10, 6))
+    sns.lineplot(
+        data=df,
+        x="Input Rate",
+        y="99th Percentile Actual Time (ms)",
+        hue="Scale",
+        marker="o",
+    )
+    plt.title("Input Rate vs 99th Percentile Actual Time")
+    plt.xlabel("Input Rate")
+    plt.ylabel("99th Percentile Actual Time (ms)")
+    plt.legend(title="Scale")
+    plt.savefig("tasks/stream/figure/sd_para_latency.png")
+    plt.close()  # Close the figure to prevent overlap
+
+    # Plot 2: Input Rate vs Throughput
+    plt.figure(figsize=(10, 6))
+    sns.lineplot(
+        data=df,
+        x="Input Rate",
+        y="Throughput (msg/sec)",
+        hue="Scale",
+        marker="o",
+    )
+    plt.title("Input Rate vs Throughput (msg/sec)")
+    plt.xlabel("Input Rate")
+    plt.ylabel("Throughput (msg/sec)")
+    plt.legend(title="Scale")
+    plt.savefig("tasks/stream/figure/sd_para_throughput.png")
+    plt.close()  # Close the figure to prevent overlap

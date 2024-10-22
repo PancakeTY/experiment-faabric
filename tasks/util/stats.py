@@ -14,7 +14,8 @@ def extract_data(file_path):
     percentile_time_pattern = re.compile(r"99th percentile actual time: (?P<percentile_time>[\d\.]+) ms,")
     actual_duration_pattern = re.compile(r"Actual Duration: (?P<actual_duration>[\d\.]+) ms")
     average_duration_pattern = re.compile(r"Average duration: (?P<average_duration>[\d\.]+) μs")
-
+    average_tuple_duration_pattern = re.compile(r"Average avg_tuple_duration: (?P<avg_tuple_duration>[\d\.]+) μs")
+   
     # Lists to store the extracted data
     data = []
 
@@ -22,9 +23,9 @@ def extract_data(file_path):
     runs = re.split(r"\n(?=\d{2}--\w{3}--\d{4} \d{2}:\d{2}:\d{2} Running with rate=)", log_text)
 
     for run in runs:
-        print("-"*120)
-        print(run)
-        print("-"*120)
+        # print("-"*120)
+        # print(run)
+        # print("-"*120)
         if not run.strip():
             continue  # Skip empty strings
 
@@ -68,7 +69,11 @@ def extract_data(file_path):
         average_durations = average_duration_pattern.findall(run)
         if average_durations:
             run_data['Average Duration (µs)'] = sum(map(float, average_durations)) / len(average_durations)
-
+        
+        average_tuple_durations = average_tuple_duration_pattern.findall(run)
+        if average_tuple_durations:
+            run_data['Average Tuple Duration (µs)'] = sum(map(float, average_tuple_durations)) / len(average_tuple_durations)
+              
         # Calculate throughput
         run_data['Throughput (msg/sec)'] = (run_data['Total Messages Processed'] / run_data['Actual Duration (ms)']) * 1000
 
