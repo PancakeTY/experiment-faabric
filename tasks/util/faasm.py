@@ -112,7 +112,7 @@ def get_faasm_exec_chained_milli_time_from_json(results_json, check=False):
 
     return actual_times, function_metrics, min_start_ts, max_finish_ts
 
-def get_faasm_metrics_from_json(json_result, deadline):
+def get_faasm_metrics_from_json(json_result, deadline, native=False):
     # Group the results by chain ID and find the actual_time for each chained functions
     grouped_results = defaultdict(list)
     function_metrics = defaultdict(lambda: defaultdict(list))
@@ -145,14 +145,24 @@ def get_faasm_metrics_from_json(json_result, deadline):
         if msg_finish_ts is None or int(msg_result["finish_ts"]) > msg_finish_ts:
             msg_finish_ts = int(msg_result["finish_ts"])
         # Get the mertics
-        planner_queue_time = int(msg_result['plannerQueueTime'])
-        planner_pop_time = int(msg_result['plannerPopTime'])
-        planner_dispatch_time = int(msg_result['plannerDispatchTime'])
-        worker_queue_time = int(msg_result['workerQueueTime'])
-        worker_pop_time = int(msg_result['workerPopTime'])
-        executor_prepare_time = int(msg_result['ExecutorPrepareTime'])
-        worker_execute_start_time = int(msg_result['workerExecuteStart'])
-        worker_execute_end_time = int(msg_result['workerExecuteEnd'])
+        if native:
+            planner_queue_time = int(msg_result.get('plannerQueueTime', 0))
+            planner_pop_time = int(msg_result.get('plannerPopTime', 0))
+            planner_dispatch_time = int(msg_result.get('plannerDispatchTime', 0))
+            worker_queue_time = int(msg_result.get('workerQueueTime', 0))
+            worker_pop_time = int(msg_result.get('workerPopTime', 0))
+            executor_prepare_time = int(msg_result.get('ExecutorPrepareTime', 0))
+            worker_execute_start_time = int(msg_result.get('workerExecuteStart', 0))
+            worker_execute_end_time = int(msg_result.get('workerExecuteEnd', 0))
+        else:
+            planner_queue_time = int(msg_result['plannerQueueTime'])
+            planner_pop_time = int(msg_result['plannerPopTime'])
+            planner_dispatch_time = int(msg_result['plannerDispatchTime'])
+            worker_queue_time = int(msg_result['workerQueueTime'])
+            worker_pop_time = int(msg_result['workerPopTime'])
+            executor_prepare_time = int(msg_result['ExecutorPrepareTime'])
+            worker_execute_start_time = int(msg_result['workerExecuteStart'])
+            worker_execute_end_time = int(msg_result['workerExecuteEnd'])
         output_data = ""
         if 'output_data' in msg_result:
             output_data = msg_result['output_data']
