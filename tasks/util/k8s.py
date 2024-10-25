@@ -1,3 +1,4 @@
+import subprocess
 from subprocess import run
 from time import sleep
 
@@ -35,3 +36,15 @@ def wait_for_pods(namespace, label, num_expected=1, quiet=False):
                 )
             )
         sleep(5)
+
+def flush_redis():
+    try:
+        result = subprocess.run(
+            ["kubectl", "exec", "-n", "faasm", "redis-state", "--", "redis-cli", "FLUSHALL"],
+            check=True,
+            capture_output=True,
+            text=True
+        )
+        print("Output:", result.stdout)
+    except subprocess.CalledProcessError as e:
+        print("Error:", e.stderr)

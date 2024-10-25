@@ -264,10 +264,9 @@ def varied_batch_exp(ctx, scale=3):
     write_string_to_log(RESULT_FILE, "experiment result: varied_batch_exp")
     inputbatch = 20
     concurrency = 10
-    batchsize_list = [30]
+    batchsize_list = [40, 50]
     # batchsize_list = [1, 5, 10, 15, 20, 30]
-    # rates = [1000, 1500, 2000, 2500, 3000, 3500]
-    rates = [3000, 3500]
+    rates = [1000, 1500, 2000, 2500, 3000, 3500]
 
     for batchsize in batchsize_list:
         for rate in rates:
@@ -342,7 +341,6 @@ def varied_para_exp(ctx, scale=3):
     """
     global DURATION
     global RESULT_FILE
-
 
     DURATION = 60
     # RESULT_FILE = 'tasks/stream/logs/exp_sd_para.txt'

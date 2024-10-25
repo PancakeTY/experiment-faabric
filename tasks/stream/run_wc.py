@@ -263,12 +263,17 @@ def varied_batch_exp(ctx, scale=3):
     runtime: 10 minutes or all the data are processed
     """
     global DURATION
+    global RESULT_FILE
 
+    DURATION = 60
+    RESULT_FILE = 'tasks/stream/logs/exp_wc_batch.txt'
     write_string_to_log(RESULT_FILE, CUTTING_LINE)
+    write_string_to_log(RESULT_FILE, "experiment result: varied batch size")
     inputbatch = 20
     concurrency = 10
-    batchsize_list = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 30]
-    rates = [1000, 1200, 1400, 1600, 1800, 2000]
+    # batchsize_list = [1, 10, 20, 30, 40]
+    batchsize_list = [60]
+    rates = [1800, 2200, 2600]
 
     for batchsize in batchsize_list:
         for rate in rates:

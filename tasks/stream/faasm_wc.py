@@ -4,16 +4,30 @@ import concurrent.futures
 import threading
 import re
 from collections import defaultdict
+from datetime import datetime
 
 from tasks.util.faasm import (
     get_faasm_metrics_from_json,
     get_chained_faasm_exec_time_from_json,
     post_async_msg_and_get_result_json,
+    write_string_to_log,
 )
 
 from tasks.util.thread import AtomicInteger
+from tasks.util.k8s import flush_redis
+from faasmctl.util.flush import flush_workers
+
+# Static
+CUTTING_LINE = "-------------------------------------------------------------------------------"
+CURRENT_DATE = datetime.now().strftime("%Y-%m-%d")
+# Mutable
+DURATION = 600
+NUM_INPUT_THREADS = 10
+RESULT_FILE = 'tasks/stream/logs/native_exp_wc.txt'
+MAX_INPUT_COUNT = None
 
 def read_sentences_from_file(file_path):
+    global MAX_INPUT_COUNT
     try:
         with open(file_path, 'r') as file:
             text = file.read()
@@ -31,6 +45,9 @@ def read_sentences_from_file(file_path):
     # Group words into sentences of 10 words each
     sentences = [' '.join(words[i:i+10]) for i in range(0, len(words), 10)]
     print(f"Total sentences created: {len(sentences)}")
+
+    if MAX_INPUT_COUNT is not None:
+        sentences = sentences[:MAX_INPUT_COUNT]
 
     return sentences
 
@@ -59,6 +76,8 @@ def worker_thread(end_time, sentences, atomic_count, input_batch):
     while time.time() < end_time:
         try:
             input_id = atomic_count.get_and_increment(input_batch)
+            if input_id + input_batch >= len(sentences):
+                break
             input_data = generate_input_data(sentences, input_id, input_id + input_batch -1)
             result = send_message_and_get_result(input_id, input_data, input_batch)
             results.append(result)
@@ -73,8 +92,11 @@ def run(ctx, input_batch = 1):
     Use multiple threads to run the 'wordcount' application and check latency and throughput.
     """
     FILE_PATH = 'tasks/stream/data/books.txt'
-    DURATION = 10 # Seconds
-    WORKER_NUM = 5
+    global DURATION
+    WORKER_NUM = 1
+
+    flush_workers()
+    flush_redis()
 
     sentences = read_sentences_from_file(FILE_PATH)
     total_sentences = len(sentences)
@@ -115,11 +137,32 @@ def run(ctx, input_batch = 1):
                 print(f"Generated an exception: {exc}")
 
     average_time = total_time / total_count if total_count > 0 else 0
-    print(f"Total messages sent: {total_count}")
-    print(f"Average actual time: {average_time} ms")
+    metrics_str = ""
+    metrics_str += f"Total messages sent: {total_count}\n"
+    metrics_str += f"Average actual time: {average_time} ms\n"
 
     for func_name, metrics in function_metrics.items():
-        print(f"Metrics for {func_name}:")
+        metrics_str += f"Metrics for {func_name}:\n"
         for metric_name, times in metrics.items():
             average_metric_time = sum(times) / len(times) if times else 0
-            print(f"  Average {metric_name}: {int(average_metric_time)} μs")
+            metrics_str += f"  Average {metric_name}: {int(average_metric_time)} μs\n"
+
+    print(metrics_str)
+
+    write_string_to_log(RESULT_FILE, metrics_str)
+
+@task
+def state_single(ctx):
+    global DURATION
+    global RESULT_FILE
+    global MAX_INPUT_COUNT
+
+    DURATION = 600
+    RESULT_FILE = 'tasks/stream/logs/native_exp_wc_single.txt'
+    write_string_to_log(RESULT_FILE, CUTTING_LINE)
+    write_string_to_log(RESULT_FILE, "experiment result: wc_state_single_native remote vs local access")
+
+    MAX_INPUT_COUNT = 2000
+    repeat = 3
+    for i in range(repeat):
+        run(ctx)
