@@ -65,11 +65,11 @@ def batch_consumer(batch_queue, appid_list, appid_list_lock, INPUT_MSG, input_ba
             break  # Use break instead of return for clarity
         input_index, input_data, chained_id_list = batch_data
         # Send batch async message
-        appid_return = post_async_batch_msg(input_index, INPUT_MSG, input_batchsize, input_data, chained_id_list)
+        chained_id_return = post_async_batch_msg(input_index, INPUT_MSG, input_batchsize, input_data, chained_id_list)
         # Update shared resources safely
-        if appid_return is not None:
+        if chained_id_return is not None:
             with appid_list_lock:
-                appid_list.append(appid_return)
+                appid_list.extend(chained_id_return)
         batch_queue.task_done()
 
         # If the end time is reached, return.

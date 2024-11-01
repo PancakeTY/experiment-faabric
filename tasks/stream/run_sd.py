@@ -66,8 +66,8 @@ def run(ctx, scale, batchsize, concurrency, inputbatch, input_rate, duration):
     
     # Run one request at begining
     input_data = generate_input_data(records, 0, 1, INPUT_MAP)
-    appid = post_async_batch_msg(100000, INPUT_MSG, batch_size = 1, input_list = input_data, chained_id_list = [1])
-    query_result(appid)
+    chained_id_return = post_async_batch_msg(100000, INPUT_MSG, batch_size = 1, input_list = input_data, chained_id_list = [1])
+    query_result(chained_id_return[0])
 
     # Adjust the parameters
     if scale > 1:
@@ -131,6 +131,9 @@ def run(ctx, scale, batchsize, concurrency, inputbatch, input_rate, duration):
         # Wait for consumer threads to finish
         for thread in input_threads:
             thread.join()
+
+    print("All threads finished")
+    time.sleep(10)
 
     # Get results from 
     get_result_start_time = None
@@ -344,33 +347,33 @@ def varied_para_exp(ctx, scale=3):
 
     DURATION = 60
     # RESULT_FILE = 'tasks/stream/logs/exp_sd_para.txt'
-    RESULT_FILE = 'tasks/stream/logs/temp.txt'
+    RESULT_FILE = 'tasks/stream/logs/tempnew.txt'
     write_string_to_log(RESULT_FILE, CUTTING_LINE)
     write_string_to_log(RESULT_FILE, "experiment result: varied parallelism")
 
     inputbatch = 300
     concurrency = 10
     batchsize = 20
-    # rates = [1000, 2000, 3000, 4000, 5000, 10000, 12000, 14000]
-    rates = [6000, 8000]
+    rates = [8000, 12000]
     # scale_list = [1, 2, 3]
-    scale_list = [2]
+    scale_list = [3,2,1]
 
-    for scale in scale_list:
-        for rate in rates:
-            timestamp = datetime.now().strftime("%d--%b--%Y %H:%M:%S")
-            start_message = f"{timestamp} Running with rate={rate}, batchsize={batchsize}, concurrency={concurrency}, inputbatch={inputbatch}, scale={scale}, duration={DURATION}"   
-            write_string_to_log(RESULT_FILE, start_message)
-            # Call the test_contention task with the current batchsize
-            run(ctx, scale=scale, batchsize=batchsize, concurrency=concurrency, inputbatch=inputbatch, input_rate=rate, duration=DURATION)
-            print(f"Completed test_contention with con: {concurrency}")
+    for i in range(5):
+        for scale in scale_list:
+            for rate in rates:
+                timestamp = datetime.now().strftime("%d--%b--%Y %H:%M:%S")
+                start_message = f"{timestamp} Running with rate={rate}, batchsize={batchsize}, concurrency={concurrency}, inputbatch={inputbatch}, scale={scale}, duration={DURATION}"   
+                write_string_to_log(RESULT_FILE, start_message)
+                # Call the test_contention task with the current batchsize
+                run(ctx, scale=scale, batchsize=batchsize, concurrency=concurrency, inputbatch=inputbatch, input_rate=rate, duration=DURATION)
+                print(f"Completed test_contention with con: {concurrency}")
 
 @task
 def varied_para_plot(ctx):
     """
     Plot the 'varied parallelism' experiment
     """
-    data = extract_data("tasks/stream/logs/exp_sd_para.txt")
+    data = extract_data("tasks/stream/logs/tempnew.txt")
     df = pd.DataFrame(data)
     print(df)
 
@@ -393,7 +396,7 @@ def varied_para_plot(ctx):
     plt.xlabel("Input Rate")
     plt.ylabel("99th Percentile Actual Time (ms)")
     plt.legend(title="Scale")
-    plt.savefig("tasks/stream/figure/sd_para_latency.png")
+    plt.savefig("tasks/stream/figure/sd_para_latency_new.png")
     plt.close()  # Close the figure to prevent overlap
 
     # Plot 2: Input Rate vs Throughput
@@ -409,5 +412,5 @@ def varied_para_plot(ctx):
     plt.xlabel("Input Rate")
     plt.ylabel("Throughput (msg/sec)")
     plt.legend(title="Scale")
-    plt.savefig("tasks/stream/figure/sd_para_throughput.png")
+    plt.savefig("tasks/stream/figure/sd_para_throughput_new.png")
     plt.close()  # Close the figure to prevent overlap

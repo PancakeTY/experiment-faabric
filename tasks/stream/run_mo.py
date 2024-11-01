@@ -29,7 +29,6 @@ from tasks.util.faasm import (
     post_async_batch_msg,
     write_metrics_to_log,
     write_string_to_log,
-    async_invoke_thread,
     generate_input_data,
     statistics_result,
 )
@@ -68,8 +67,8 @@ def run(ctx, scale=0, batchsize=0, concurrency=10, input_rate=2000):
     
     # Run one request at begining
     input_data = generate_input_data(records, 0, 1, INPUT_MAP)
-    appid = post_async_batch_msg(100000, INPUT_MSG, batch_size = 1, input_list = input_data, chained_id_list = [1])
-    query_result(appid)
+    chained_id_return = post_async_batch_msg(100000, INPUT_MSG, batch_size = 1, input_list = input_data, chained_id_list = [1])
+    query_result(chained_id_return[0])
 
     # Adjust the parameters
     if scale > 1:

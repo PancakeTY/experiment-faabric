@@ -3,7 +3,7 @@ from faasmctl.util.config import (
     get_faasm_planner_host_port as faasmctl_get_planner_host_port,
 )
 from faasmctl.util.invoke import invoke_wasm as faasmctl_invoke_wasm
-from faasmctl.util.invoke import invoke_wasm_without_wait as faasmctl_invoke_wasm_without_wait
+from faasmctl.util.invoke import invoke_wasm_messages as faasmctl_invoke_wasm_messages
 from faasmctl.util.invoke import query_result as faasmctl_query_result
 from os import environ
 from collections import defaultdict
@@ -260,14 +260,10 @@ def post_async_batch_msg(app_id, msg, batch_size=1, input_list=None, chained_id_
     if batch_size != len(chained_id_list):
         print ("ERROR: batch_size != len(chained_id_list)")
         assert False
-    appid = faasmctl_invoke_wasm_without_wait(app_id, msg_dict=msg, num_messages=batch_size, 
+    chained_id_list = faasmctl_invoke_wasm_messages(app_id, msg_dict=msg, num_messages=batch_size, 
                                               input_list=input_list, chained_id_list=chained_id_list,
                                               num_retries = 10000, sleep_period_secs=0.05)
-    if appid is None:
-        print ("ERROR: AppID invoke failed")
-    elif appid != appid:
-        print ("ERROR: AppID mismatch")
-    return appid
+    return chained_id_list
 
 def write_metrics_to_log(path, function_metrics):
     log_dir = os.path.dirname(path)
@@ -303,28 +299,6 @@ def write_string_to_log(path, log_message):
 def generate_input_data(records, start, size, input_map):
     # Use input_map to access the specific indices for each attribute
     return [{key: record[input_map[key]] for key in input_map} for record in records[start:start + size]]
-
-def async_invoke_thread(records, atomic_count, input_batchsize, INPUT_MSG, input_map, appid_list, appid_list_lock, end_time):
-    start_time = time.time()
-    print(f"thread Start time: {start_time}")
-    while time.time() <= end_time:
-        input_index = atomic_count.get_and_increment(input_batchsize)
-        if input_index + input_batchsize >= len(records):
-            break
-        input_data = generate_input_data(records, input_index, input_batchsize, input_map)
-        # Preparae the app id and chained id.
-        # The app id is the first chained id of the batch.
-        # The chained id is the index of the input data from the input file
-        chained_id_list = [input_index + i for i in range(input_batchsize)]
-
-        # Send batch async message
-        appid_return = post_async_batch_msg(input_index, INPUT_MSG, input_batchsize, input_data, chained_id_list)
-        # Update shared resources safely
-        if appid_return is not None:
-            with appid_list_lock:
-                appid_list.append(appid_return)
-        # now = time.time()
-        # print(f"{now}Sent batch of {input_batchsize} messages")
 
 def filter_json_results(json_results):
     filtered_results = []

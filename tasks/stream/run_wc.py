@@ -89,8 +89,9 @@ def run(ctx, scale, batchsize, concurrency, inputbatch, input_rate, duration):
     
     # Run one request at begining
     input_data = generate_input_data(records, 0, 1, INPUT_MAP)
-    appid = post_async_batch_msg(100000, INPUT_MSG, batch_size = 1, input_list = input_data, chained_id_list = [1])
-    query_result(appid)
+    chained_id_return = post_async_batch_msg(100000, INPUT_MSG, batch_size = 1, input_list = input_data, chained_id_list = [1])
+    print(chained_id_return)
+    query_result(chained_id_return[0])
 
     # Adjust the parameters
     if scale > 1:
@@ -154,6 +155,9 @@ def run(ctx, scale, batchsize, concurrency, inputbatch, input_rate, duration):
         # Wait for consumer threads to finish
         for thread in input_threads:
             thread.join()
+
+    print("All threads finished")
+    time.sleep(10)
 
     # Get results from 
     get_result_start_time = None
@@ -269,11 +273,11 @@ def varied_batch_exp(ctx, scale=3):
     RESULT_FILE = 'tasks/stream/logs/exp_wc_batch.txt'
     write_string_to_log(RESULT_FILE, CUTTING_LINE)
     write_string_to_log(RESULT_FILE, "experiment result: varied batch size")
-    inputbatch = 20
+    inputbatch = 300
     concurrency = 10
     # batchsize_list = [1, 10, 20, 30, 40]
-    batchsize_list = [60]
-    rates = [1800, 2200, 2600]
+    batchsize_list = [50, 60, 100]
+    rates = [30000]
 
     for batchsize in batchsize_list:
         for rate in rates:
@@ -348,7 +352,7 @@ def varied_para_exp(ctx, scale=3):
     global DURATION
     global RESULT_FILE
     
-    DURATION = 60
+    DURATION = 20
     RESULT_FILE = 'tasks/stream/logs/exp_wc_para.txt'
 
     write_string_to_log(RESULT_FILE, CUTTING_LINE)
@@ -357,7 +361,7 @@ def varied_para_exp(ctx, scale=3):
     inputbatch = 200
     concurrency = 10
     batchsize = 20
-    rates = [1600, 1800, 2000, 2200]
+    rates = [6000, 8000, 10000]
     scale_list = [1, 2, 3]
 
     for scale in scale_list:
