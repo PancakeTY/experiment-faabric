@@ -112,7 +112,7 @@ def get_faasm_exec_chained_milli_time_from_json(results_json, check=False):
 
     return actual_times, function_metrics, min_start_ts, max_finish_ts
 
-def get_faasm_metrics_from_json(json_result, deadline, native=False):
+def get_faasm_metrics_from_json(json_result, deadline, function_include=None, native=False):
     # Group the results by chain ID and find the actual_time for each chained functions
     grouped_results = defaultdict(list)
     function_metrics = defaultdict(lambda: defaultdict(list))
@@ -128,9 +128,19 @@ def get_faasm_metrics_from_json(json_result, deadline, native=False):
     for chained_id, results in grouped_results.items():
         start_ts = int(min(result['start_ts'] for result in results))
         finish_ts = int(max(result['finish_ts'] for result in results))
+        # If the finish timestamp is greater than the deadline, skip the chained_id
         if finish_ts > deadline:
             invalid_chained_ids.append(chained_id)
             continue
+        # If we must include some functions, skip the chained_id if it is not in the list
+        if function_include is not None:
+            valid = False
+            for result in results:
+                function_name = result['function']
+                if function_name == function_include:
+                    valid = True
+            if not valid:
+                invalid_chained_ids.append(chained_id)
         actual_time = finish_ts - start_ts
         actual_times[chained_id] = actual_time
 
@@ -196,10 +206,11 @@ def get_faasm_metrics_from_json(json_result, deadline, native=False):
         function_metrics[function_name]['executor_prepare_time'].append(executor_prepare_time)
         function_metrics[function_name]['worker_execute_elapse'].append(worker_execute_elapse)
         function_metrics[function_name]['total_elapse'].append(total_elapse)
+        function_metrics[function_name]['count'].append(1)
         if duration is not None:
             function_metrics[function_name]['duration'].append(duration)
         if input_size is not None:
-            function_metrics[function_name]['input_size'].append(input_size)    
+            function_metrics[function_name]['input_size'].append(input_size)
         if avg_tuple_duration is not None:
             function_metrics[function_name]['avg_tuple_duration'].append(avg_tuple_duration)    
 
@@ -274,8 +285,12 @@ def write_metrics_to_log(path, function_metrics):
         for func_name, metrics in function_metrics.items():
             log_file.write(f"Metrics for {func_name}:\n")
             for metric_name, times in metrics.items():
-                average_metric_time = sum(times) / len(times) if times else 0
-                log_file.write(f"  Average {metric_name}: {int(average_metric_time)} μs\n")
+                if metric_name == "count":
+                    metric_value = sum(times)
+                    log_file.write(f"  Total count {metric_name}: {metric_value}\n")
+                else:
+                    average_metric_time = sum(times) / len(times) if times else 0
+                    log_file.write(f"  Average {metric_name}: {int(average_metric_time)} μs\n")
         log_file.write("\n")
 
 def write_string_to_log(path, log_message):
@@ -350,16 +365,27 @@ def get_result_thread(appid_list, appid_list_lock, shared_batches_min_start_ts, 
         with result_lock:
             batches_result.append(filtered_json_results)
    
-def statistics_result(batches_result, DURATION):
+def statistics_result(batches_result, DURATION, function_include=None):
     function_metrics = defaultdict(lambda: defaultdict(list))
     actual_times_array = []
-    json_result = batches_result[1]
-    tmp_msg_start_ts = int(min([result["start_ts"] for result in json_result]))
+
+    all_start_ts = [
+    result["start_ts"]
+    for json_result in batches_result
+    if json_result  
+    for result in json_result
+    if "start_ts" in result  
+    ]
+
+    # Calculate the minimum start_ts if any are found
+    if all_start_ts:
+        tmp_msg_start_ts = int(min(all_start_ts))
+
     deadline = tmp_msg_start_ts + DURATION * 1000
     min_start_ts = None
     max_finish_ts = None
     for app_result in batches_result:
-        actual_times, app_metrics, msg_start_ts, msg_finish_ts = get_faasm_metrics_from_json(app_result, deadline)
+        actual_times, app_metrics, msg_start_ts, msg_finish_ts = get_faasm_metrics_from_json(app_result, deadline, function_include)
         # Update the minimum start timestamp
         if msg_start_ts is None or msg_finish_ts is None:
             continue

@@ -8,11 +8,14 @@ from concurrent.futures import ThreadPoolExecutor
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+import sys
+from datetime import datetime, timedelta
+import time
 
 # Utility imports for Faasm and task management
-from faasmctl.util.flush import flush_workers, flush_scheduler
+from faasmctl.util.flush import flush_workers, flush_scheduler, flush_scheduler
 from faasmctl.util.planner import (
-    reset_batch_size, scale_function_parallelism, 
+    reset_batch_size, scale_function_parallelism, reset_stream_parameter,
     register_function_state, reset_max_replicas, output_result
 )
 from faasmctl.util.invoke import query_result
@@ -22,6 +25,7 @@ from tasks.util.thread import (
     batch_consumer,
 )
 from tasks.util.file import copy_outout, load_app_results
+from tasks.util.k8s import flush_redis
 
 # Custom utility functions
 from tasks.util.faasm import (
@@ -32,16 +36,18 @@ from tasks.util.faasm import (
     statistics_result,
 )
 
-from tasks.util.stats import extract_data
+from tasks.util.stats import extract_data, extract_avg_tuple_duration
+from tasks.util.k8s import flush_redis
+from tasks.util.plot import varied_para_plot_util, varied_batch_plot_util, varied_con_plot_util
 
 # Static
 CUTTING_LINE = "-------------------------------------------------------------------------------"
 CURRENT_DATE = datetime.now().strftime("%Y-%m-%d")
 # Mutable
 DURATION = 600
-INPUT_BATCHSIZE = 20
+INPUT_BATCHSIZE = 300
 NUM_INPUT_THREADS = 10
-INPUT_FILE = 'tasks/stream/data/books.txt'
+INPUT_FILE = 'tasks/stream/data/Top100_Gutenberg_books.txt'
 INPUT_MSG = {
     "user": "stream",
     "function": "wordcountindiv_split",
@@ -71,7 +77,7 @@ def read_sentences_from_file(file_path):
     return sentences
 
 @task
-def run(ctx, scale, batchsize, concurrency, inputbatch, input_rate, duration):
+def run(ctx, scale, batchsize, concurrency, inputbatch, input_rate, duration, max_inflight_reqs = 15000):
     """
     Test the 'wordcount' function with resource contention.
     Input rate unit: data/ second
@@ -84,9 +90,12 @@ def run(ctx, scale, batchsize, concurrency, inputbatch, input_rate, duration):
     records = read_sentences_from_file(INPUT_FILE)
     flush_workers()
     flush_scheduler()
-    
+    flush_redis()
+
     register_function_state("stream_wordcountindiv_count", "partitionedAttribute", "partitionStateKey")
-    
+    reset_stream_parameter("is_outputting", 0)
+    reset_stream_parameter("max_inflight_reqs", max_inflight_reqs)
+
     # Run one request at begining
     input_data = generate_input_data(records, 0, 1, INPUT_MAP)
     chained_id_return = post_async_batch_msg(100000, INPUT_MSG, batch_size = 1, input_list = input_data, chained_id_list = [1])
@@ -198,7 +207,7 @@ def overall_exp(ctx, scale=3):
     global DURATION
 
     write_string_to_log(RESULT_FILE, CUTTING_LINE)
-    inputbatch = 20
+    inputbatch = 500
     concurrency = 10
     batchsize = 20
     rates = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 1100, 1200, 1300, 1400, 1500, 1600, 1700, 1800, 1900, 2000, 2100, 2200, 2300, 2400, 2500]
@@ -269,24 +278,36 @@ def varied_batch_exp(ctx, scale=3):
     global DURATION
     global RESULT_FILE
 
-    DURATION = 60
     RESULT_FILE = 'tasks/stream/logs/exp_wc_batch.txt'
+    inputbatch = 500
+    concurrency = 10
+    batchsize_list = [1, 10, 20, 40, 80, 200, 500]
+    rates = [2000, 4000, 6000, 8000, sys.maxsize]
+
+    # for i in range(4):  # Run the entire process 4 times
     write_string_to_log(RESULT_FILE, CUTTING_LINE)
     write_string_to_log(RESULT_FILE, "experiment result: varied batch size")
-    inputbatch = 300
-    concurrency = 10
-    # batchsize_list = [1, 10, 20, 30, 40]
-    batchsize_list = [50, 60, 100]
-    rates = [30000]
-
     for batchsize in batchsize_list:
         for rate in rates:
             timestamp = datetime.now().strftime("%d--%b--%Y %H:%M:%S")
             start_message = f"{timestamp} Running with rate={rate}, batchsize={batchsize}, concurrency={concurrency}, inputbatch={inputbatch}, scale={scale}, duration={DURATION}"   
             write_string_to_log(RESULT_FILE, start_message)
             # Call the test_contention task with the current batchsize
-            run(ctx, scale=scale, batchsize=batchsize, concurrency=concurrency, inputbatch=inputbatch, input_rate=rate, duration=DURATION)
-            print(f"Completed test_contention with con: {concurrency}")
+            while True:
+                try:
+                    # Call the test_contention task with the current batchsize
+                    run(ctx, scale=scale, batchsize=batchsize, concurrency=concurrency, inputbatch=inputbatch, input_rate=rate, duration=DURATION)
+                    print(f"Completed test_contention with con: {concurrency}")
+                    break  # Break the loop if the function completes successfully
+                except Exception as e:
+                    # Log the error message
+                    error_timestamp = datetime.now().strftime("%d--%b--%Y %H:%M:%S")
+                    error_message = f"{error_timestamp} Error occurred: {e}. Retrying in 1 minute..."
+                    write_string_to_log(RESULT_FILE, error_message)
+                    print(error_message)
+                    
+                    # Wait for 1 minute before retrying
+                    time.sleep(60)
 
 @task
 def varied_batch_plot(ctx):
@@ -294,49 +315,27 @@ def varied_batch_plot(ctx):
     Plot the 'varied batch size' experiment
     """
 
-    #unfinished
     data = extract_data("tasks/stream/logs/exp_wc_batch.txt")
-
     df = pd.DataFrame(data)
-    # Ensure that the data types are correct
+
+    # Convert columns to appropriate data types
     df['Input Rate'] = df['Input Rate'].astype(int)
-    df['Batch Size'] = df['Batch Size'].astype(int)
+    df['Scale'] = df['Scale'].astype(int)
     df['99th Percentile Actual Time (ms)'] = df['99th Percentile Actual Time (ms)'].astype(float)
+    df['Throughput (msg/sec)'] = df['Throughput (msg/sec)'].astype(float)
+    df['Input Rate'] = df['Input Rate'].replace(9223372036854775807, float('inf'))
 
-    sns.set(style="whitegrid")
+    pd.set_option('display.max_rows', None)
+    sorted_df = df.sort_values(by=['Batch Size', 'Input Rate'])
+    # print(sorted_df)
 
-    # Plot 1: Input Rate vs 99th Percentile Actual Time
-    plt.figure(figsize=(10, 6))
-    sns.lineplot(
-        data=df,
-        x="Input Rate",
-        y="99th Percentile Actual Time (ms)",
-        hue="Batch Size",
-        marker="o",
-    )
-    plt.title("Input Rate vs 99th Percentile Actual Time")
-    plt.xlabel("Input Rate")
-    plt.ylabel("99th Percentile Actual Time (ms)")
-    plt.legend(title="Batch Size")
-    plt.savefig("tasks/stream/figure/wc_batch_latency.png")
-    plt.close()  # Close the figure to prevent overlap
+    duplicates = df[df.duplicated(['Throughput (msg/sec)'], keep=False)]
+    print(duplicates)
 
-    # Plot 2: Input Rate vs Throughput
-    plt.figure(figsize=(10, 6))
-    sns.lineplot(
-        data=df,
-        x="Input Rate",
-        y="Throughput (msg/sec)",
-        hue="Batch Size",
-        marker="o",
-    )
-    plt.title("Input Rate vs Throughput")
-    plt.xlabel("Input Rate")
-    plt.ylabel("Throughput (msg/sec)")
-    plt.legend(title="Batch Size")
-    plt.savefig("tasks/stream/figure/wc_batch_throughput.png")
-    plt.close()
+    grouped_counts = df.groupby(['Batch Size', 'Input Rate']).size().reset_index(name='counts')
+    # print(grouped_counts)
 
+    varied_batch_plot_util(df, "wc")
 
 # Experiment for different scale performance
 @task
@@ -352,20 +351,21 @@ def varied_para_exp(ctx, scale=3):
     global DURATION
     global RESULT_FILE
     
-    DURATION = 20
     RESULT_FILE = 'tasks/stream/logs/exp_wc_para.txt'
 
     write_string_to_log(RESULT_FILE, CUTTING_LINE)
     write_string_to_log(RESULT_FILE, "experiment result: varied parallelism")
 
-    inputbatch = 200
+    inputbatch = 500
     concurrency = 10
     batchsize = 20
-    rates = [6000, 8000, 10000]
+    # rates = [1000, 2000, 4000, 6000, sys.maxsize]
+    rates = [sys.maxsize]
     scale_list = [1, 2, 3]
 
     for scale in scale_list:
         for rate in rates:
+    # for scale, rate in test_cases:
             timestamp = datetime.now().strftime("%d--%b--%Y %H:%M:%S")
             start_message = f"{timestamp} Running with rate={rate}, batchsize={batchsize}, concurrency={concurrency}, inputbatch={inputbatch}, scale={scale}, duration={DURATION}"   
             write_string_to_log(RESULT_FILE, start_message)
@@ -378,47 +378,26 @@ def varied_para_plot(ctx):
     """
     Plot the 'varied parallelism' experiment
     """
+    import ast
     data = extract_data("tasks/stream/logs/exp_wc_para.txt")
     df = pd.DataFrame(data)
-    print(df)
 
     df['Input Rate'] = df['Input Rate'].astype(int)
     df['Scale'] = df['Scale'].astype(int)
     df['99th Percentile Actual Time (ms)'] = df['99th Percentile Actual Time (ms)'].astype(float)
     df['Throughput (msg/sec)'] = df['Throughput (msg/sec)'].astype(float)
-    sns.set(style="whitegrid")
+    df['Input Rate'] = df['Input Rate'].replace(9223372036854775807, float('inf'))
 
-    # Plot 1: Input Rate vs 99th Percentile Actual Time
-    plt.figure(figsize=(10, 6))
-    sns.lineplot(
-        data=df,
-        x="Input Rate",
-        y="99th Percentile Actual Time (ms)",
-        hue="Scale",
-        marker="o",
-    )
-    plt.title("Input Rate vs 99th Percentile Actual Time")
-    plt.xlabel("Input Rate")
-    plt.ylabel("99th Percentile Actual Time (ms)")
-    plt.legend(title="Scale")
-    plt.savefig("tasks/stream/figure/wc_para_latency.png")
-    plt.close()  # Close the figure to prevent overlap
+    df = df[df['Input Rate'] != 8000]
 
-    # Plot 2: Input Rate vs Throughput
-    plt.figure(figsize=(10, 6))
-    sns.lineplot(
-        data=df,
-        x="Input Rate",
-        y="Throughput (msg/sec)",
-        hue="Scale",
-        marker="o",
-    )
-    plt.title("Input Rate vs Throughput (msg/sec)")
-    plt.xlabel("Input Rate")
-    plt.ylabel("Throughput (msg/sec)")
-    plt.legend(title="Scale")
-    plt.savefig("tasks/stream/figure/wc_para_throughput.png")
-    plt.close()  # Close the figure to prevent overlap
+    pd.set_option('display.max_rows', None)
+    sorted_df = df.sort_values(by=['Scale', 'Input Rate'])
+    print(sorted_df)
+
+    duplicates = df[df.duplicated(['Throughput (msg/sec)'], keep=False)]
+    # print(duplicates)
+
+    varied_para_plot_util(df, "wc", 3, "stream_wordcountindiv_count_0")
 
 # Experiment for latency performance
 @task
@@ -470,10 +449,10 @@ def varied_con_exp(ctx, scale=1):
     write_string_to_log(RESULT_FILE, CUTTING_LINE)
     write_string_to_log(RESULT_FILE, "experiment result: varied_con_exp")
 
-    inputbatch = 300
+    inputbatch = 500
     concurrency_list = [1, 2, 3, 4, 5]
     batchsize = 30
-    rate = 1200
+    rate = 6000
     for concurrency in concurrency_list:
         timestamp = datetime.now().strftime("%d--%b--%Y %H:%M:%S")
         start_message = f"{timestamp} Running with rate={rate}, batchsize={batchsize}, concurrency={concurrency}, inputbatch={inputbatch}, scale={scale}, duration={DURATION}"   
@@ -490,24 +469,10 @@ def varied_con_plot(ctx):
     data = extract_data("tasks/stream/logs/exp_wc_cons.txt")
     df = pd.DataFrame(data)
 
+    # Process DataFrame
+    function_name = "stream_wordcountindiv_count_0"
     df_filter = pd.DataFrame()
     df_filter['Concurrency'] = df['Concurrency'].astype(int)
-    df_filter['Average Tuple Duration (µs)'] = df['Average Tuple Duration (µs)'].astype(float)
+    df_filter['Average Tuple Duration (µs)'] = df['Functions'].apply(lambda x: extract_avg_tuple_duration(x, function_name=function_name))
 
-    df_avg = df_filter.groupby('Concurrency', as_index=False)['Average Tuple Duration (µs)'].mean()
-
-    plt.figure(figsize=(10, 6))
-    sns.set(style="whitegrid")
-    sns.lineplot(
-        data=df_avg,
-        x="Concurrency",
-        y="Average Tuple Duration (µs)",
-        marker="o",
-    )
-    plt.title("Concurrency vs Duration per Request (µs)")
-    plt.xlabel("Concurrency")
-    plt.ylabel("Duration per Request (µs)")
-    plt.xticks(ticks=range(df_avg['Concurrency'].min(), df_avg['Concurrency'].max() + 1))
-
-    plt.savefig("tasks/stream/figure/wc_con_duration.png")
-    plt.close()  # Close the figure to prevent overlap
+    varied_con_plot_util(df_filter, "wc")

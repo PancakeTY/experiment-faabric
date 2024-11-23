@@ -1,31 +1,40 @@
 import re
 
 # Input log text
-def extract_data(file_path):
+import re
+
+def extract_data(file_path, function_include=None):
     log_text = ""
     with open(file_path, "r") as file:
         log_text = file.read()
 
     # Regular expressions to match the required data
-    run_pattern = re.compile(r"Running with rate=(?P<input_rate>\d+), batchsize=(?P<batch_size>\d+), concurrency=(?P<concurrency>\d+), .* scale=(?P<scale>\d+), duration=\d+")
+    run_pattern = re.compile(
+        r"Running with rate=(?P<input_rate>\d+), batchsize=(?P<batch_size>\d+), concurrency=(?P<concurrency>\d+), .* scale=(?P<scale>\d+), duration=\d+"
+    )
     total_messages_pattern = re.compile(r"Total messages processed: (?P<total_messages>\d+),")
     median_time_pattern = re.compile(r"Median actual time: (?P<median_time>[\d\.]+) ms,")
     percentile_95_time_pattern = re.compile(r"95th percentile actual time: (?P<percentile_95_time>[\d\.]+) ms,")
     percentile_time_pattern = re.compile(r"99th percentile actual time: (?P<percentile_time>[\d\.]+) ms,")
     actual_duration_pattern = re.compile(r"Actual Duration: (?P<actual_duration>[\d\.]+) ms")
-    average_duration_pattern = re.compile(r"Average duration: (?P<average_duration>[\d\.]+) μs")
-    average_tuple_duration_pattern = re.compile(r"Average avg_tuple_duration: (?P<avg_tuple_duration>[\d\.]+) μs")
-   
+
+    # Patterns for function metrics
+    function_pattern = re.compile(
+        r"Metrics for (?P<function_name>[\w_]+):\n((?:  .+\n)+)"
+    )
+    total_count_pattern = re.compile(r"  Total count count: (?P<total_count>[\d\.]+)")
+    average_duration_pattern = re.compile(r"  Average duration: (?P<average_duration>[\d\.]+) μs")
+    average_tuple_duration_pattern = re.compile(r"  Average avg_tuple_duration: (?P<avg_tuple_duration>[\d\.]+) μs")
+
     # Lists to store the extracted data
     data = []
 
     # Split the log text into sections for each run
-    runs = re.split(r"\n(?=\d{2}--\w{3}--\d{4} \d{2}:\d{2}:\d{2} Running with rate=)", log_text)
+    runs = re.split(
+        r"\n(?=\d{2}--\w{3}--\d{4} \d{2}:\d{2}:\d{2} Running with rate=)", log_text
+    )
 
     for run in runs:
-        # print("-"*120)
-        # print(run)
-        # print("-"*120)
         if not run.strip():
             continue  # Skip empty strings
 
@@ -65,22 +74,59 @@ def extract_data(file_path):
         if actual_duration:
             run_data['Actual Duration (ms)'] = int(actual_duration.group('actual_duration'))
 
-        # Extract average duration (calculate average if multiple values are present)
-        average_durations = average_duration_pattern.findall(run)
-        if average_durations:
-            run_data['Average Duration (µs)'] = sum(map(float, average_durations)) / len(average_durations)
-        
-        average_tuple_durations = average_tuple_duration_pattern.findall(run)
-        if average_tuple_durations:
-            run_data['Average Tuple Duration (µs)'] = sum(map(float, average_tuple_durations)) / len(average_tuple_durations)
-              
+        # Extract metrics for each function
+        functions_data = {}
+        for function_match in function_pattern.finditer(run):
+            function_name = function_match.group('function_name')
+            function_metrics = function_match.group(0)  # The whole match including the data
+
+            # Extract total count
+            total_count_match = total_count_pattern.search(function_metrics)
+            total_count = int(total_count_match.group('total_count')) if total_count_match else None
+
+            # Extract average duration
+            average_duration_match = average_duration_pattern.search(function_metrics)
+            average_duration = float(average_duration_match.group('average_duration')) if average_duration_match else None
+
+            # Extract average tuple duration
+            avg_tuple_duration_match = average_tuple_duration_pattern.search(function_metrics)
+            avg_tuple_duration = float(avg_tuple_duration_match.group('avg_tuple_duration')) if avg_tuple_duration_match else None
+
+            # Store the data
+            functions_data[function_name] = {
+                'Total Count': total_count,
+                'Average Duration (µs)': average_duration,
+                'Average Tuple Duration (µs)': avg_tuple_duration
+            }
+
+        # Store functions_data in run_data
+        run_data['Functions'] = functions_data
+
+        if function_include is not None:
+            run_data['Total Messages Processed'] = 0
+            for function_name, metrics in run_data['Functions'].items():
+                if function_include + '_' in function_name:
+                    run_data['Total Messages Processed'] = run_data['Total Messages Processed'] + metrics['Total Count']
+
         # Calculate throughput
-        run_data['Throughput (msg/sec)'] = (run_data['Total Messages Processed'] / run_data['Actual Duration (ms)']) * 1000
+        run_data['Throughput (msg/sec)'] = (
+            run_data['Total Messages Processed'] / run_data['Actual Duration (ms)']
+        ) * 1000
 
         data.append(run_data)
 
     return data
 
+
+def extract_avg_tuple_duration(func_data, function_name):
+    if isinstance(func_data, dict):
+        return func_data.get(function_name, {}).get("Average Tuple Duration (µs)")
+    else:
+        try:
+            func_dict = ast.literal_eval(func_data)
+            return func_dict.get(function_name, {}).get("Average Tuple Duration (µs)")
+        except Exception:
+            return None
 
 def print_data(data):
     # Print the extracted data

@@ -4,33 +4,53 @@ from faasmctl.util.config import get_faasm_ini_value as faasmctl_get_faasm_ini_v
 import subprocess
 import json
 from typing import Dict, Any, List
+import os
+import time
 
 def copy_outout(destination_path = 'tasks/stream/tmp/faasm_result.txt'):
     ini_file = faasmctl_get_faasm_ini_file()
     backend = faasmctl_get_faasm_ini_value(ini_file, "Faasm", "backend")
     source_path = "/tmp/faasm_result.txt"
 
+    if os.path.exists(destination_path):
+        try:
+            os.remove(destination_path)
+            print(f"Deleted existing file at {destination_path}.")
+        except Exception as e:
+            print(f"Failed to delete existing file: {e}")
+            return
+
     if backend == "compose":
         cluster_name = faasmctl_get_faasm_ini_value(ini_file, "Faasm", "cluster_name")
         planner_name = cluster_name+"-planner-1"
         command = ["docker", "cp", f"{planner_name}:{source_path}", destination_path]
-        print(f"running command: {command}")
-        # Run the command
-        try:
-            subprocess.run(command, check=True)
-            print("File copied successfully.")
-        except subprocess.CalledProcessError as e:
-            print(f"An error occurred: {e}")
     elif backend == "k8s":
         command = ["kubectl", "cp", f"planner:{source_path}", destination_path, "-n", "faasm"]
-        print(f"running command: {command}")
+    else:
+        raise RuntimeError("Unsupported backend: {}".format(backend)) 
+    
+    max_retries = 5
+    for attempt in range(1, max_retries + 1):
+        print(f"Running command (attempt {attempt}): {command}")
         try:
             subprocess.run(command, check=True)
             print("File copied successfully.")
         except subprocess.CalledProcessError as e:
-            print(f"An error occurred: {e}")        
-    else:
-        raise RuntimeError("Unsupported backend: {}".format(backend)) 
+            print(f"An error occurred during copy: {e}")
+
+        # Check if the file exists
+        if os.path.exists(destination_path):
+            print("File exists at destination after copy.")
+            return
+        else:
+            print(f"File not found at {destination_path}, retrying...")
+
+        time.sleep(1)
+
+    # If we reach here, it means the file was not copied successfully after 5 attempts
+    raise RuntimeError(f"Failed to copy file to {destination_path} after {max_retries} attempts.")
+
+
 
 
 def load_app_results(file_path: str = 'tasks/stream/tmp/faasm_result.txt') -> Dict[int, List[Dict[str, Any]]]:

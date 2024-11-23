@@ -4,6 +4,11 @@ from os.path import join
 from subprocess import run
 from tasks.util.env import PLOTS_ROOT
 from tasks.util.faasm import get_faasm_version
+from tasks.util.stats import extract_avg_tuple_duration
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+import pandas as pd
 
 _PLOT_COLORS = {
     "granny": (1, 0.4, 0.4),
@@ -174,3 +179,174 @@ def save_plot(fig, plot_dir, plot_name):
             hostname, plot_file, tmp_file, tmp_file
         )
     )
+
+def varied_para_plot_util(df, application, workers = 3, function_duration = None):
+    """
+    Plot the 'varied parallelism' experiment with bar figure
+    """
+
+    sns.set(style="whitegrid")
+
+    custom_colors =['#c6e9b4', '#40b5c4', '#225da8']  # Example colors for scales 1, 2, 3
+
+    # Histogram 1: Distribution of Input Rate
+    plt.figure(figsize=(6.4, 4.8))
+    sns.barplot(
+    data=df,
+    x="Input Rate",
+    y="99th Percentile Actual Time (ms)",
+    hue="Scale",
+    errorbar=None,
+    palette=custom_colors
+    )
+    plt.xlabel('')
+    plt.ylabel('')
+    plt.tight_layout()
+    if workers == 3:
+        plt.savefig(f"tasks/stream/figure/{application}_para_latency.png")
+        plt.savefig(f"tasks/stream/pdf/{application}_para_latency.pdf")
+    else:
+        plt.savefig(f"tasks/stream/figure/{application}_para_latency_{workers}-worker.png")       
+        plt.savefig(f"tasks/stream/pdf/{application}_para_latency_{workers}-worker.pdf")
+    plt.close()
+
+    # Histogram 3: Distribution of Throughput
+    plt.figure(figsize=(6.4, 4.8))
+    sns.barplot(
+    data=df,
+    x="Input Rate",
+    y="Throughput (msg/sec)",
+    hue="Scale",
+    errorbar=None,
+    palette=custom_colors
+    )
+    plt.xlabel('')  # Hide x-axis label
+    plt.ylabel('')  # Hide y-axis label
+    plt.tight_layout()  # Adjust layout to reduce whitespace
+    if workers == 3:
+        plt.savefig(f"tasks/stream/figure/{application}_para_throughput.png")
+        plt.savefig(f"tasks/stream/pdf/{application}_para_throughput.pdf")
+    else:
+        plt.savefig(f"tasks/stream/figure/{application}_para_throughput_{workers}-worker.png")       
+        plt.savefig(f"tasks/stream/pdf/{application}_para_throughput_{workers}-worker.pdf")       
+    plt.close()
+
+    if function_duration is None:
+        return
+    
+    # Plot the duration of function_duration
+    df_filter = pd.DataFrame()
+    df_filter['Input Rate'] = df['Input Rate']
+    df_filter['Scale'] = df['Scale'].astype(int)
+    df_filter['Average Tuple Duration (µs)'] = df['Functions'].apply(lambda x: extract_avg_tuple_duration(x, function_name=function_duration))
+    plt.figure(figsize=(6.4, 4.8))
+    sns.barplot(
+        data=df_filter,
+        x="Input Rate",
+        y="Average Tuple Duration (µs)",
+        hue="Scale",
+        errorbar=None,
+        palette=custom_colors
+    )
+    plt.xlabel('')
+    plt.ylabel('')
+    plt.tight_layout()
+    if workers == 3:
+        plt.savefig(f"tasks/stream/figure/{application}_para_duration.png")
+        plt.savefig(f"tasks/stream/pdf/{application}_para_duration.pdf")
+    else:
+        plt.savefig(f"tasks/stream/figure/{application}_para_duration_{workers}-worker.png")
+        plt.savefig(f"tasks/stream/pdf/{application}_para_duration_{workers}-worker.pdf")
+    plt.close()
+
+def varied_batch_plot_util(df, application):
+    """
+    Plot the 'varied batch size' experiment with an overlay of 5-point boxplots.
+    """
+
+    sns.set(style="whitegrid")
+
+    # Plot 1: Input Rate vs 99th Percentile Actual Time
+    plt.figure(figsize=(6.4, 4.8))
+    sns.barplot(
+        data=df,
+        x="Input Rate",
+        y="99th Percentile Actual Time (ms)",
+        hue="Batch Size",
+        errorbar=None,
+        palette=sns.color_palette("YlGnBu", n_colors=df['Batch Size'].nunique()),
+    )
+    
+    # Overlay boxplots
+    sns.boxplot(
+        data=df,
+        x="Input Rate",
+        y="99th Percentile Actual Time (ms)",
+        hue="Batch Size",
+        dodge=True,  # Ensures boxplots are aligned with the bar plot groups
+        palette="husl",
+        fliersize=0,  # Optional: hide outliers if not needed
+        linewidth=1  # Optional: customize the box line thickness
+    )
+    
+    plt.yscale('log')
+    plt.xlabel('')
+    plt.ylabel('')
+    plt.legend(loc='best')  # Adjust legend position
+    plt.tight_layout()
+    plt.savefig(f"tasks/stream/figure/{application}_batch_latency.png")
+    plt.savefig(f"tasks/stream/pdf/{application}_batch_latency.pdf")
+    plt.close()
+
+    # Plot 2: Input Rate vs Throughput
+    plt.figure(figsize=(6.4, 4.8))
+    sns.barplot(
+        data=df,
+        x="Input Rate",
+        y="Throughput (msg/sec)",
+        hue="Batch Size",
+        errorbar=None,
+        palette=sns.color_palette("YlGnBu", n_colors=df['Batch Size'].nunique())
+    )
+
+    # Overlay boxplots
+    sns.boxplot(
+        data=df,
+        x="Input Rate",
+        y="Throughput (msg/sec)",
+        hue="Batch Size",
+        dodge=True,  # Ensures boxplots are aligned with the bar plot groups
+        palette="husl",
+        fliersize=0,  # Optional: hide outliers if not needed
+        linewidth=1  # Optional: customize the box line thickness
+    )
+
+    plt.xlabel('')
+    plt.ylabel('')
+    plt.legend(loc='best')  # Adjust legend position
+    plt.tight_layout()
+    plt.savefig(f"tasks/stream/figure/{application}_batch_throughput.png")
+    plt.savefig(f"tasks/stream/pdf/{application}_batch_throughput.pdf")
+    plt.close()
+
+
+def varied_con_plot_util(df, application):
+    # Group and calculate mean
+    df_avg = df.groupby('Concurrency', as_index=False)['Average Tuple Duration (µs)'].mean()
+
+    plt.figure(figsize=(6.4, 4.8))
+    sns.set(style="whitegrid")
+    sns.lineplot(
+        data=df_avg,
+        x="Concurrency",
+        y="Average Tuple Duration (µs)",
+        marker="o",
+    )
+    plt.xlabel('')
+    plt.ylabel('')
+    plt.tight_layout()
+    plt.xticks(ticks=range(df_avg['Concurrency'].min(), df_avg['Concurrency'].max() + 1))
+
+    plt.savefig(f"tasks/stream/figure/{application}_con_duration.png")
+    plt.savefig(f"tasks/stream/pdf/{application}_con_duration.pdf")
+    plt.close()  # Close the figure to prevent overlap
