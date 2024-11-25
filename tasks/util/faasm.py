@@ -240,9 +240,15 @@ def post_async_msg_and_get_result_json(msg, num_message = 1, host_list=None, req
         req_dict=req_dict,
         input_list=input_list,
         chainedId_list=chainedId_list,
-        poll_period_in=0.01,
+        poll_period_in=0.5,
+        poll_retry_in=10,
     )
-    return result["messageResults"]
+    if "finished" in result:
+        is_finished = result["finished"]
+    else:
+        is_finished = False
+    
+    return is_finished, result["messageResults"]
 
 def post_async_batch_msg_and_get_result_json(msg, batch_size=100, host_list=None):
     result = faasmctl_invoke_wasm(msg, num_messages=batch_size, dict_out=True, host_list=host_list)
@@ -365,7 +371,7 @@ def get_result_thread(appid_list, appid_list_lock, shared_batches_min_start_ts, 
         with result_lock:
             batches_result.append(filtered_json_results)
    
-def statistics_result(batches_result, DURATION, function_include=None):
+def statistics_result(batches_result, DURATION, function_include=None, native=False):
     function_metrics = defaultdict(lambda: defaultdict(list))
     actual_times_array = []
 
@@ -385,7 +391,7 @@ def statistics_result(batches_result, DURATION, function_include=None):
     min_start_ts = None
     max_finish_ts = None
     for app_result in batches_result:
-        actual_times, app_metrics, msg_start_ts, msg_finish_ts = get_faasm_metrics_from_json(app_result, deadline, function_include)
+        actual_times, app_metrics, msg_start_ts, msg_finish_ts = get_faasm_metrics_from_json(app_result, deadline, function_include, native)
         # Update the minimum start timestamp
         if msg_start_ts is None or msg_finish_ts is None:
             continue
@@ -409,6 +415,7 @@ def statistics_result(batches_result, DURATION, function_include=None):
     np_result_message = (
                 "Numpy result: \n"
                 f"Total messages processed: {len(actual_times_array)},\n"
+                f"Average throughput: {1000*len(actual_times_array)/duration} tuples/s,\n"
                 f"Average actual time: {np_average_time} ms,\n"
                 f"Median actual time: {np_median_time} ms,\n"
                 f"99th percentile actual time: {np_percentile_99_time} ms,\n"

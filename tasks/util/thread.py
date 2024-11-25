@@ -1,4 +1,4 @@
-from tasks.util.faasm import generate_input_data, post_async_batch_msg
+from tasks.util.faasm import generate_input_data, post_async_batch_msg, post_async_msg_and_get_result_json
 
 import threading
 import time
@@ -72,6 +72,26 @@ def batch_consumer(batch_queue, appid_list, appid_list_lock, INPUT_MSG, input_ba
                 appid_list.extend(chained_id_return)
         batch_queue.task_done()
 
+        # If the end time is reached, return.
+        now = time.time()
+        if now > end_time + 1:
+            break
+
+def native_batch_consumer(batch_queue, result_list, result_list_lock, INPUT_MSG, input_batchsize, end_time):
+    while True:
+        batch_data = batch_queue.get()  # Blocking call, waits indefinitely
+        if batch_data is None:
+            # Sentinel value received, exit the thread
+            batch_queue.task_done()
+            break  # Use break instead of return for clarity
+        input_index, input_data, chained_id_list = batch_data
+        # Send batch async message
+        is_finished, result_json = post_async_msg_and_get_result_json(INPUT_MSG, num_message = input_batchsize, input_list=input_data, chainedId_list = chained_id_list)
+
+        if is_finished:
+            with result_list_lock:
+                result_list.append(result_json)
+        batch_queue.task_done()
         # If the end time is reached, return.
         now = time.time()
         if now > end_time + 1:

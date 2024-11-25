@@ -3,31 +3,46 @@ from invoke import task
 import concurrent.futures
 import threading
 import re
+from queue import Queue
+from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
 from datetime import datetime
 
 from tasks.util.faasm import (
     get_faasm_metrics_from_json,
+    write_metrics_to_log,
     get_chained_faasm_exec_time_from_json,
     post_async_msg_and_get_result_json,
     write_string_to_log,
+    statistics_result,
 )
 
-from tasks.util.thread import AtomicInteger
+from tasks.util.thread import (
+    AtomicInteger,
+    batch_producer,
+    native_batch_consumer,
+)
+
+from faasmctl.util.flush import flush_workers, flush_scheduler, flush_scheduler
 from tasks.util.k8s import flush_redis
-from faasmctl.util.flush import flush_workers
 
 # Static
 CUTTING_LINE = "-------------------------------------------------------------------------------"
 CURRENT_DATE = datetime.now().strftime("%Y-%m-%d")
 # Mutable
 DURATION = 600
+INPUT_BATCHSIZE = 1
 NUM_INPUT_THREADS = 10
+INPUT_FILE = 'tasks/stream/data/Top100_Gutenberg_books.txt'
+INPUT_MSG = {
+    "user": "stream",
+    "function": "wc_split",
+}
 RESULT_FILE = 'tasks/stream/logs/native_exp_wc.txt'
 MAX_INPUT_COUNT = None
+INPUT_MAP = {"sentence": 0}
 
 def read_sentences_from_file(file_path):
-    global MAX_INPUT_COUNT
     try:
         with open(file_path, 'r') as file:
             text = file.read()
@@ -43,126 +58,93 @@ def read_sentences_from_file(file_path):
     print(f"Total words extracted: {len(words)}")
 
     # Group words into sentences of 10 words each
-    sentences = [' '.join(words[i:i+10]) for i in range(0, len(words), 10)]
+    sentences = [[' '.join(words[i:i+10])] for i in range(0, len(words), 10)]
     print(f"Total sentences created: {len(sentences)}")
-
-    if MAX_INPUT_COUNT is not None:
-        sentences = sentences[:MAX_INPUT_COUNT]
 
     return sentences
 
-# Helper function to generate input data ranges
-def generate_input_data(sentences, start, end):
-    return [{"sentence": sentence} for sentence in sentences[start:end + 1]]
-
-
-def send_message_and_get_result(input_id, input_data, input_batch):
-    msg = {
-        "user": "stream",
-        "function": "wc_split",
-    }
-    print(input_data)
-    # chained Id should start from 1
-    chainedId_list = list(range(input_id + 1, input_id + 1 + input_batch))
-
-    result_json = post_async_msg_and_get_result_json(msg, num_message = input_batch, input_list=input_data, chainedId_list = chainedId_list)
-    return result_json
-    
-def worker_thread(end_time, sentences, atomic_count, input_batch):
-    count = 0
-    total_time = 0
-    results = []
-
-    while time.time() < end_time:
-        try:
-            input_id = atomic_count.get_and_increment(input_batch)
-            if input_id + input_batch >= len(sentences):
-                break
-            input_data = generate_input_data(sentences, input_id, input_id + input_batch -1)
-            result = send_message_and_get_result(input_id, input_data, input_batch)
-            results.append(result)
-        except Exception as exc:
-            print(f"Worker Generated an exception: {exc}")
-
-    return results
-
 @task(default=True)
-def run(ctx, input_batch = 1):
+def run(ctx, input_rate, inputbatch = 1):
     """
     Use multiple threads to run the 'wordcount' application and check latency and throughput.
     """
-    FILE_PATH = 'tasks/stream/data/books.txt'
-    global DURATION
-    WORKER_NUM = 1
+    global INPUT_FILE, INPUT_MSG, RESULT_FILE, INPUT_MAP, NUM_INPUT_THREADS, DURATION
 
+    write_string_to_log(RESULT_FILE, f"Input Rates:{input_rate}, Batchsize: {inputbatch}, Workers: {NUM_INPUT_THREADS}, duration:{DURATION} \n")
+    records = read_sentences_from_file(INPUT_FILE)
     flush_workers()
+    flush_scheduler()
     flush_redis()
 
-    sentences = read_sentences_from_file(FILE_PATH)
-    total_sentences = len(sentences)
+    # Launch multiple threads
+    atomic_count = AtomicInteger(1)
+    result_list = []
+    result_list_lock = threading.Lock()
+    input_threads = []
 
-    end_time = time.time() + DURATION
-    total_count = 0
-    total_time = 0
-    atomic_count = AtomicInteger(0)
-    lock = threading.Lock()  # Create a lock
+    batch_queue = Queue()
 
-    batches_min_start_ts = None
-    deadline = None
+    start_time = time.time()
+    end_time = start_time + DURATION
+    print(f"Start time: {start_time}")
+    print(f"End time: {end_time}")
+    with ThreadPoolExecutor() as executor:
+        # Submit the batch_producer function to the executor
+        future = executor.submit(
+            batch_producer,
+            records,
+            atomic_count,
+            inputbatch,
+            INPUT_MAP,
+            batch_queue,
+            end_time,
+            input_rate,
+            NUM_INPUT_THREADS
+        )
 
-    function_metrics = defaultdict(lambda: defaultdict(list))
-    with concurrent.futures.ThreadPoolExecutor(max_workers=WORKER_NUM) as executor:
-        futures = [executor.submit(worker_thread, end_time, sentences, atomic_count, input_batch) for _ in range(WORKER_NUM)]
+        # Start consumer threads
+        for _ in range(NUM_INPUT_THREADS):
+            thread = threading.Thread(
+                target=native_batch_consumer,
+                args=(
+                    batch_queue,
+                    result_list,
+                    result_list_lock,
+                    INPUT_MSG,
+                    inputbatch,
+                    end_time,
+                )
+            )
+            input_threads.append(thread)
+            thread.start()
 
-        for future in concurrent.futures.as_completed(futures):
-            try:
-                results_json = future.result()
-                for batch_result_json in results_json:
-                    start_ts = int(min([result_json["start_ts"] for result_json in batch_result_json]))
-                    # Get the deadline for the batch
-                    with lock:
-                        if batches_min_start_ts is None or start_ts < batches_min_start_ts:
-                            batches_min_start_ts = start_ts
-                            deadline = batches_min_start_ts + DURATION * 1000
+    print(f"length of result json is {len(result_list)}")
 
-                    actual_times, app_metrics, msg_start_ts, msg_finish_ts = get_faasm_metrics_from_json(batch_result_json, deadline, True)
-                    for actual_time in actual_times.values():
-                        total_time += actual_time
-                        total_count += 1
-                    for func_name, metrics in app_metrics.items():
-                        for metric_name, times in metrics.items():
-                            function_metrics[func_name][metric_name].extend(times)
-
-            except Exception as exc:
-                print(f"Generated an exception: {exc}")
-
-    average_time = total_time / total_count if total_count > 0 else 0
-    metrics_str = ""
-    metrics_str += f"Total messages sent: {total_count}\n"
-    metrics_str += f"Average actual time: {average_time} ms\n"
+    np_result_message, function_metrics = statistics_result(result_list, DURATION, native = True)
+    print(np_result_message)
+    write_string_to_log(RESULT_FILE, np_result_message)
 
     for func_name, metrics in function_metrics.items():
-        metrics_str += f"Metrics for {func_name}:\n"
+        print(f"Metrics for {func_name}:")
         for metric_name, times in metrics.items():
             average_metric_time = sum(times) / len(times) if times else 0
-            metrics_str += f"  Average {metric_name}: {int(average_metric_time)} μs\n"
-
-    print(metrics_str)
-
-    write_string_to_log(RESULT_FILE, metrics_str)
+            print(f"  Average {metric_name}: {int(average_metric_time)} μs")
+    write_metrics_to_log(RESULT_FILE, function_metrics)
 
 @task
-def state_single(ctx):
+def overall_exp(ctx):
     global DURATION
     global RESULT_FILE
     global MAX_INPUT_COUNT
+    global NUM_INPUT_THREADS 
+
+    NUM_INPUT_THREADS = 10
 
     DURATION = 600
-    RESULT_FILE = 'tasks/stream/logs/native_exp_wc_single.txt'
+    RESULT_FILE = 'tasks/stream/logs/native_exp_wc_overall.txt'
     write_string_to_log(RESULT_FILE, CUTTING_LINE)
-    write_string_to_log(RESULT_FILE, "experiment result: wc_state_single_native remote vs local access")
+    write_string_to_log(RESULT_FILE, "experiment result: native_exp_wc_overall")
 
-    MAX_INPUT_COUNT = 2000
-    repeat = 3
-    for i in range(repeat):
-        run(ctx)
+    input_rates = [1, 10, 100, 300, 400, 600]
+    for input_rate in input_rates:
+        run(ctx, input_rate = input_rate, inputbatch = 1)
