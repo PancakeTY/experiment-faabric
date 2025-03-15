@@ -35,7 +35,7 @@ from tasks.util.faasm import (
 )
 
 from tasks.util.stats import extract_data, extract_avg_tuple_duration
-from tasks.util.plot import varied_para_plot_util, varied_batch_plot_util, varied_con_plot_util
+from tasks.util.plot import varied_para_plot_util, varied_batch_plot_util, varied_con_plot_util, overall_plot_util
 
 # Static
 CUTTING_LINE = "-------------------------------------------------------------------------------"
@@ -174,6 +174,7 @@ def run(ctx, scale, batchsize, concurrency, inputbatch, input_rate, duration, ma
 @task
 def overall_exp(ctx, scale=3):
     """
+    inv stream.run-sd.overall-exp
     Run the 'overall performance' experiments of spike detection application.
     Basic setup: 
     scale 3; batchsize 20; concurrency 10; inputbatch 20; 
@@ -181,21 +182,64 @@ def overall_exp(ctx, scale=3):
     runtime: 10 minutes or all the data are processed
     """
     global DURATION
+    global RESULT_FILE
 
+    RESULT_FILE = 'tasks/stream/logs/exp_sd_oeverall.txt'
     write_string_to_log(RESULT_FILE, CUTTING_LINE)
     inputbatch = 500
     concurrency = 10
     batchsize = 20
-    rates = [1000, 2000, 3000, 4000, 6000, 8000, 10000, 12000]
+    # rates = [1, 1000, 3000, 10000, 18000, 26000]
+    rates = [18000, 26000]
 
     for rate in rates:
+        inputbatch = 500
+        if rate < inputbatch:
+            inputbatch = rate
         timestamp = datetime.now().strftime("%d--%b--%Y %H:%M:%S")
         start_message = f"{timestamp} Running with rate={rate}, batchsize={batchsize}, concurrency={concurrency}, inputbatch={inputbatch}, scale={scale}, duration={DURATION}"   
         write_string_to_log(RESULT_FILE, start_message)
         # Call the test_contention task with the current batchsize
-        run(ctx, scale=scale, batchsize=batchsize, concurrency=concurrency, inputbatch=inputbatch, input_rate=rate, duration=DURATION)
-        print(f"Completed test_contention with con: {concurrency}")
+        while True:
+            try:
+                # Call the test_contention task with the current batchsize
+                run(ctx, scale=scale, batchsize=batchsize, concurrency=concurrency, inputbatch=inputbatch, input_rate=rate, duration=DURATION)
+                print(f"Completed test_contention with con: {concurrency}")
+                break  # Break the loop if the function completes successfully
+            except Exception as e:
+                # Log the error message
+                error_timestamp = datetime.now().strftime("%d--%b--%Y %H:%M:%S")
+                error_message = f"{error_timestamp} Error occurred: {e}. Retrying in 1 minute..."
+                write_string_to_log(RESULT_FILE, error_message)
+                print(error_message)
+                
+                # Wait for 1 minute before retrying
+                time.sleep(60)
 
+@task
+def overall_plot(ctx):
+    data = extract_data("tasks/stream/logs/exp_sd_oeverall.txt")
+    df = pd.DataFrame(data)
+
+    # Convert columns to appropriate data types
+    df['Input Rate'] = df['Input Rate'].astype(int)
+    df['Scale'] = df['Scale'].astype(int)
+    df['99th Percentile Actual Time (ms)'] = df['99th Percentile Actual Time (ms)'].astype(float)
+    df['Throughput (msg/sec)'] = df['Throughput (msg/sec)'].astype(float)
+    df['Input Rate'] = df['Input Rate'].replace(9223372036854775807, float('inf'))
+
+    pd.set_option('display.max_rows', None)
+    sorted_df = df.sort_values(by=['Batch Size', 'Input Rate'])
+    print(sorted_df)
+
+    duplicates = df[df.duplicated(['Throughput (msg/sec)'], keep=False)]
+    print(duplicates)
+
+    grouped_counts = df.groupby(['Batch Size', 'Input Rate']).size().reset_index(name='counts')
+    print(grouped_counts)
+
+    overall_plot_util(df, "sd")
+                
 # Experiment for different concurrency
 @task
 def varied_con_exp(ctx, scale=1):
@@ -215,7 +259,8 @@ def varied_con_exp(ctx, scale=1):
     write_string_to_log(RESULT_FILE, "experiment result: varied_con_exp")
 
     inputbatch = 500
-    concurrency_list = [1, 2, 3, 4, 5]
+    # concurrency_list = [1, 2, 3, 4, 5]
+    concurrency_list = [5]
     batchsize = 30
     rate = 12000
     for concurrency in concurrency_list:
@@ -242,6 +287,15 @@ def varied_con_plot(ctx):
     df_filter['Average Tuple Duration (µs)'] = df['Functions'].apply(lambda x: extract_avg_tuple_duration(x, function_name=function_name))
 
     print(df_filter)
+
+    pd.set_option('display.max_rows', None)
+
+    grouped_counts = df.groupby(['Concurrency', 'Input Rate']).size().reset_index(name='counts')
+    print(grouped_counts)
+
+    duplicates = df[df.duplicated(['Throughput (msg/sec)'], keep=False)]
+    print(duplicates)
+
     varied_con_plot_util(df_filter, "sd")
 
 # Experiment for different batch size performance
@@ -311,10 +365,10 @@ def varied_batch_plot(ctx):
 
     pd.set_option('display.max_rows', None)
     sorted_df = df.sort_values(by=['Batch Size', 'Input Rate'])
-    print(sorted_df)
+    # print(sorted_df)
 
     duplicates = df[df.duplicated(['Throughput (msg/sec)'], keep=False)]
-    # print(duplicates)
+    print(duplicates)
 
     grouped_counts = df.groupby(['Batch Size', 'Input Rate']).size().reset_index(name='counts')
     print(grouped_counts)
@@ -373,10 +427,53 @@ def varied_para_plot(ctx):
     pd.set_option('display.max_rows', None)
     # print(df)
 
-    # duplicates = df[df.duplicated(['Throughput (msg/sec)'], keep=False)]
-    # print(duplicates)
+    duplicates = df[df.duplicated(['Throughput (msg/sec)'], keep=False)]
+    print(duplicates)
 
-    sorted_df = df.sort_values(by=['Scale', 'Input Rate'])
-    print(sorted_df)
+    # sorted_df = df.sort_values(by=['Scale', 'Input Rate'])
+    # print(sorted_df)
+
+    grouped_counts = df.groupby(['Scale', 'Input Rate']).size().reset_index(name='counts')
+    print(grouped_counts)
 
     varied_para_plot_util(df, "sd", 3, 'stream_sd_moving_avg_0')
+
+    # Experiment for different concurrency
+@task
+def latency_exp(ctx, scale=1):
+    """
+    inv stream.run-sd.latency-exp
+    """
+    global DURATION
+    global RESULT_FILE
+
+    RESULT_FILE = 'tasks/stream/logs/exp_sd_latency.txt'
+    write_string_to_log(RESULT_FILE, CUTTING_LINE)
+    write_string_to_log(RESULT_FILE, "experiment result: exp_sd_latency")
+
+    inputbatch = 1
+    batchsize = 1
+    rate = 1
+    concurrency = 10
+    scale_list = [1, 3]
+
+    for scale in scale_list:
+        timestamp = datetime.now().strftime("%d--%b--%Y %H:%M:%S")
+        start_message = f"{timestamp} Running with rate={rate}, batchsize={batchsize}, concurrency={concurrency}, inputbatch={inputbatch}, scale={scale}, duration={DURATION}"   
+        write_string_to_log(RESULT_FILE, start_message)
+        # Call the test_contention task with the current batchsize
+        while True:
+            try:
+                # Call the test_contention task with the current batchsize
+                run(ctx, scale=scale, batchsize=batchsize, concurrency=concurrency, inputbatch=inputbatch, input_rate=rate, duration=DURATION)
+                print(f"Completed test_contention with con: {concurrency}")
+                break  # Break the loop if the function completes successfully
+            except Exception as e:
+                # Log the error message
+                error_timestamp = datetime.now().strftime("%d--%b--%Y %H:%M:%S")
+                error_message = f"{error_timestamp} Error occurred: {e}. Retrying in 1 minute..."
+                write_string_to_log(RESULT_FILE, error_message)
+                print(error_message)
+                
+                # Wait for 1 minute before retrying
+                time.sleep(60)

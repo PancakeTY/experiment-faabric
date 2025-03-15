@@ -128,6 +128,29 @@ def extract_avg_tuple_duration(func_data, function_name):
         except Exception:
             return None
 
+def extract_avg_tuple_duration_prefix(func_data, function_name_prefix):
+    durations = []
+
+    if isinstance(func_data, dict):
+        # Iterate over all keys in the dictionary
+        for key, value in func_data.items():
+            if key.startswith(function_name_prefix) and "Average Tuple Duration (µs)" in value:
+                durations.append(value["Average Tuple Duration (µs)"])
+    else:
+        try:
+            # Parse string representation of the dictionary
+            func_dict = ast.literal_eval(func_data)
+            for key, value in func_dict.items():
+                if key.startswith(function_name_prefix) and "Average Tuple Duration (µs)" in value:
+                    durations.append(value["Average Tuple Duration (µs)"])
+        except Exception:
+            return None
+
+    # Return the average duration if any values were found, else None
+    if durations:
+        return sum(durations) / len(durations)
+    return None
+
 def print_data(data):
     # Print the extracted data
     print("Extracted Data:")

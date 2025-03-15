@@ -70,7 +70,7 @@ def run(ctx, input_rate, inputbatch = 1):
     """
     global INPUT_FILE, INPUT_MSG, RESULT_FILE, INPUT_MAP, NUM_INPUT_THREADS, DURATION
 
-    write_string_to_log(RESULT_FILE, f"Input Rates:{input_rate}, Batchsize: {inputbatch}, Workers: {NUM_INPUT_THREADS}, duration:{DURATION} \n")
+    write_string_to_log(RESULT_FILE, f"New Exp --- Input Rates:{input_rate}, Batchsize: {inputbatch}, Workers: {NUM_INPUT_THREADS}, duration:{DURATION} \n")
     records = read_sentences_from_file(INPUT_FILE)
     flush_workers()
     flush_scheduler()
@@ -145,6 +145,47 @@ def overall_exp(ctx):
     write_string_to_log(RESULT_FILE, CUTTING_LINE)
     write_string_to_log(RESULT_FILE, "experiment result: native_exp_wc_overall")
 
-    input_rates = [1, 10, 100, 300, 400, 600]
+    # input_rates = [1000, 2000, 3500, 5000, 6500]
+    input_rates = [6500]
+    for input_rate in input_rates:
+        run(ctx, input_rate = input_rate, inputbatch = 1)
+
+
+@task
+def latency_exp_3node(ctx):
+    global DURATION
+    global RESULT_FILE
+    global MAX_INPUT_COUNT
+    global NUM_INPUT_THREADS 
+
+    NUM_INPUT_THREADS = 10
+
+    DURATION = 600
+    RESULT_FILE = 'tasks/stream/logs/native_wc_latency_3node.txt'
+    write_string_to_log(RESULT_FILE, CUTTING_LINE)
+    write_string_to_log(RESULT_FILE, "experiment result: native_wc_latency_3node")
+
+    input_rates = [1]
+    for input_rate in input_rates:
+        run(ctx, input_rate = input_rate, inputbatch = 1)
+
+@task
+def latency_exp_1node(ctx):
+    """
+        inv stream.faasm-wc.latency-exp-1node
+    """
+    global DURATION
+    global RESULT_FILE
+    global MAX_INPUT_COUNT
+    global NUM_INPUT_THREADS 
+
+    NUM_INPUT_THREADS = 1
+
+    DURATION = 600
+    RESULT_FILE = 'tasks/stream/logs/native_wc_latency_1node.txt'
+    write_string_to_log(RESULT_FILE, CUTTING_LINE)
+    write_string_to_log(RESULT_FILE, "experiment result: native_wc_latency_1node")
+
+    input_rates = [1]
     for input_rate in input_rates:
         run(ctx, input_rate = input_rate, inputbatch = 1)

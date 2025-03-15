@@ -185,22 +185,27 @@ def varied_para_plot_util(df, application, workers = 3, function_duration = None
     Plot the 'varied parallelism' experiment with bar figure
     """
 
-    sns.set(style="whitegrid")
+    sns.set(style="ticks")
 
     custom_colors =['#c6e9b4', '#40b5c4', '#225da8']  # Example colors for scales 1, 2, 3
 
     # Histogram 1: Distribution of Input Rate
-    plt.figure(figsize=(6.4, 4.8))
+    plt.figure(figsize=(10, 6))
+    ax = plt.gca()
+
     sns.barplot(
     data=df,
     x="Input Rate",
     y="99th Percentile Actual Time (ms)",
     hue="Scale",
-    errorbar=None,
-    palette=custom_colors
+    errorbar="ci",  # or "ci" for confidence intervals
+    capsize=0.3,    # Controls the "T" cap size
+    err_kws={"color": "black", "linewidth": 1.5},  # Updated approach
+    palette=custom_colors,
+    ax=ax
     )
-    plt.xlabel('')
-    plt.ylabel('')
+    plt.xlabel('Input Rate (tuple/s)')
+    plt.ylabel('End-to-end Latency (ms)')
     plt.tight_layout()
     if workers == 3:
         plt.savefig(f"tasks/stream/figure/{application}_para_latency.png")
@@ -211,17 +216,22 @@ def varied_para_plot_util(df, application, workers = 3, function_duration = None
     plt.close()
 
     # Histogram 3: Distribution of Throughput
-    plt.figure(figsize=(6.4, 4.8))
+    plt.figure(figsize=(10, 6))
+    ax = plt.gca()
+
     sns.barplot(
     data=df,
     x="Input Rate",
     y="Throughput (msg/sec)",
     hue="Scale",
-    errorbar=None,
+    errorbar="ci",  # or "ci" for confidence intervals
+    capsize=0.3,    # Controls the "T" cap size
+    err_kws={"color": "black", "linewidth": 1.5},  # Updated approach
+    ax=ax,
     palette=custom_colors
     )
-    plt.xlabel('')  # Hide x-axis label
-    plt.ylabel('')  # Hide y-axis label
+    plt.xlabel('Input Rate (tuple/s)')
+    plt.ylabel('Throughput (tuple/s)')
     plt.tight_layout()  # Adjust layout to reduce whitespace
     if workers == 3:
         plt.savefig(f"tasks/stream/figure/{application}_para_throughput.png")
@@ -239,17 +249,22 @@ def varied_para_plot_util(df, application, workers = 3, function_duration = None
     df_filter['Input Rate'] = df['Input Rate']
     df_filter['Scale'] = df['Scale'].astype(int)
     df_filter['Average Tuple Duration (µs)'] = df['Functions'].apply(lambda x: extract_avg_tuple_duration(x, function_name=function_duration))
-    plt.figure(figsize=(6.4, 4.8))
+    plt.figure(figsize=(10, 6))
+    ax = plt.gca()
+
     sns.barplot(
         data=df_filter,
         x="Input Rate",
         y="Average Tuple Duration (µs)",
         hue="Scale",
-        errorbar=None,
+        errorbar="ci",  # or "ci" for confidence intervals
+        capsize=0.3,    # Controls the "T" cap size
+        err_kws={"color": "black", "linewidth": 1.5},  # Updated approach
+        ax=ax,
         palette=custom_colors
     )
-    plt.xlabel('')
-    plt.ylabel('')
+    plt.xlabel('Input Rate (tuple/s)')
+    plt.ylabel("Average Tuple Processing Latency (µs)")
     plt.tight_layout()
     if workers == 3:
         plt.savefig(f"tasks/stream/figure/{application}_para_duration.png")
@@ -259,94 +274,287 @@ def varied_para_plot_util(df, application, workers = 3, function_duration = None
         plt.savefig(f"tasks/stream/pdf/{application}_para_duration_{workers}-worker.pdf")
     plt.close()
 
+    # df_grouped = df.groupby(['Input Rate', 'Scale'])['Throughput (msg/sec)'].mean().reset_index()
+
+    # # Print the average throughput for each combination of Input Rate and Scale
+    # print("Average Throughput (msg/sec) for each combination of Input Rate and Scale:")
+    # for index, row in df_grouped.iterrows():
+    #     print(f"Input Rate: {row['Input Rate']}, Scale: {row['Scale']}, Average Throughput: {row['Throughput (msg/sec)']} msg/sec")
+
+    df_grouped = df.groupby(['Input Rate', 'Scale'])['99th Percentile Actual Time (ms)'].mean().reset_index()
+
+    # Print the average latency for each combination of Input Rate and Scale
+    print("Average 99th Percentile Latency (ms) for each combination of Input Rate and Scale:")
+    for index, row in df_grouped.iterrows():
+        print(f"Input Rate: {row['Input Rate']}, Scale: {row['Scale']}, Average Latency: {row['99th Percentile Actual Time (ms)']} ms")
+
 def varied_batch_plot_util(df, application):
     """
-    Plot the 'varied batch size' experiment with an overlay of 5-point boxplots.
+    Plot the 'varied batch size' experiment with T-shaped error bars
+    using the updated Seaborn API (>= 0.15) and concise axis labels.
     """
+    import seaborn as sns
+    import matplotlib.pyplot as plt
+    import matplotlib.ticker as mticker
 
     sns.set(style="whitegrid")
 
     # Plot 1: Input Rate vs 99th Percentile Actual Time
-    plt.figure(figsize=(6.4, 4.8))
+    plt.figure(figsize=(10, 6))
+    ax = plt.gca()
     sns.barplot(
         data=df,
         x="Input Rate",
         y="99th Percentile Actual Time (ms)",
         hue="Batch Size",
-        errorbar=None,
+        errorbar="ci",  # or "ci" for confidence intervals
+        capsize=0.3,    # Controls the "T" cap size
+        err_kws={"color": "black", "linewidth": 1.5},  # Updated approach
         palette=sns.color_palette("YlGnBu", n_colors=df['Batch Size'].nunique()),
+        ax=ax
     )
-    
-    # Overlay boxplots
-    sns.boxplot(
-        data=df,
-        x="Input Rate",
-        y="99th Percentile Actual Time (ms)",
-        hue="Batch Size",
-        dodge=True,  # Ensures boxplots are aligned with the bar plot groups
-        palette="husl",
-        fliersize=0,  # Optional: hide outliers if not needed
-        linewidth=1  # Optional: customize the box line thickness
-    )
-    
     plt.yscale('log')
-    plt.xlabel('')
-    plt.ylabel('')
-    plt.legend(loc='best')  # Adjust legend position
+    plt.xlabel('Input Rate (tuple/s)', fontsize=14)
+    plt.ylabel('End-to-end Latency (ms)', fontsize=14)
+    # Set x-axis tick labels to be concise (e.g., 20000 -> 20k)
+    ax.xaxis.set_major_formatter(mticker.FuncFormatter(shorten_number))
+    plt.xticks(fontsize=12)
+    plt.yticks(fontsize=12)
     plt.tight_layout()
     plt.savefig(f"tasks/stream/figure/{application}_batch_latency.png")
     plt.savefig(f"tasks/stream/pdf/{application}_batch_latency.pdf")
     plt.close()
 
     # Plot 2: Input Rate vs Throughput
-    plt.figure(figsize=(6.4, 4.8))
+    plt.figure(figsize=(10, 6))
+    ax = plt.gca()
     sns.barplot(
         data=df,
         x="Input Rate",
         y="Throughput (msg/sec)",
         hue="Batch Size",
-        errorbar=None,
-        palette=sns.color_palette("YlGnBu", n_colors=df['Batch Size'].nunique())
+        errorbar="ci",
+        capsize=0.3,
+        err_kws={"color": "black", "linewidth": 1.5},  # Updated approach
+        palette=sns.color_palette("YlGnBu", n_colors=df['Batch Size'].nunique()),
+        ax=ax
     )
-
-    # Overlay boxplots
-    sns.boxplot(
-        data=df,
-        x="Input Rate",
-        y="Throughput (msg/sec)",
-        hue="Batch Size",
-        dodge=True,  # Ensures boxplots are aligned with the bar plot groups
-        palette="husl",
-        fliersize=0,  # Optional: hide outliers if not needed
-        linewidth=1  # Optional: customize the box line thickness
-    )
-
-    plt.xlabel('')
-    plt.ylabel('')
-    plt.legend(loc='best')  # Adjust legend position
+    plt.xlabel('Input Rate (tuple/s)', fontsize=14)
+    plt.ylabel('Throughput (tuple/s)', fontsize=14)
+    # Apply the same concise formatting to the x-axis
+    ax.xaxis.set_major_formatter(mticker.FuncFormatter(shorten_number))
+    plt.xticks(fontsize=12)
+    plt.yticks(fontsize=12)
     plt.tight_layout()
     plt.savefig(f"tasks/stream/figure/{application}_batch_throughput.png")
     plt.savefig(f"tasks/stream/pdf/{application}_batch_throughput.pdf")
     plt.close()
+    
 
+# def varied_batch_plot_util(df, application):
+#     """
+#     Plot the 'varied batch size' experiment with an overlay of 5-point boxplots.
+#     """
+
+#     sns.set(style="ticks")
+
+#     # Plot 1: Input Rate vs 99th Percentile Actual Time
+#     plt.figure(figsize=(10, 6))
+#     sns.barplot(
+#         data=df,
+#         x="Input Rate",
+#         y="99th Percentile Actual Time (ms)",
+#         hue="Batch Size",
+#         errorbar=None,
+#         palette=sns.color_palette("YlGnBu", n_colors=df['Batch Size'].nunique()),
+#     )
+    
+    # plt.yscale('log')
+    # plt.xlabel('Input Rate (tuple/s)')
+    # plt.ylabel('End-to-end Latency (ms)')
+    # # plt.legend(loc='best')  # Adjust legend position
+    # plt.tight_layout()
+    # plt.savefig(f"tasks/stream/figure/{application}_batch_latency.png")
+    # plt.savefig(f"tasks/stream/pdf/{application}_batch_latency.pdf")
+    # plt.close()
+
+    # # Plot 2: Input Rate vs Throughput
+    # plt.figure(figsize=(10, 6))
+    # sns.barplot(
+    #     data=df,
+    #     x="Input Rate",
+    #     y="Throughput (msg/sec)",
+    #     hue="Batch Size",
+    #     errorbar=None,
+    #     palette=sns.color_palette("YlGnBu", n_colors=df['Batch Size'].nunique())
+    # )
+
+    # plt.xlabel('Input Rate (tuple/s)')
+    # plt.ylabel('Throughput (tuple/s)')
+    # # plt.legend(loc='best')  # Adjust legend position
+    # plt.tight_layout()
+    # plt.savefig(f"tasks/stream/figure/{application}_batch_throughput.png")
+    # plt.savefig(f"tasks/stream/pdf/{application}_batch_throughput.pdf")
+    # plt.close()
+
+    # df_grouped = df.groupby(['Input Rate', 'Batch Size'])['Throughput (msg/sec)'].mean().reset_index()
+
+    # # Print the average throughput for each combination of Input Rate and Batch Size
+    # print("Average Throughput (msg/sec) for each combination of Input Rate and Batch Size:")
+    # for index, row in df_grouped.iterrows():
+    #     print(f"Input Rate: {row['Input Rate']}, Batch Size: {row['Batch Size']}, Average Throughput: {row['Throughput (msg/sec)']} msg/sec")
+
+
+# def varied_con_plot_util(df, application):
+#     # Group and calculate mean
+#     df_avg = df.groupby('Concurrency', as_index=False)['Average Tuple Duration (µs)'].mean()
+
+#     plt.figure(figsize=(10, 6))
+#     sns.set(style="ticks")
+#     # sns.set(rc={'axes.grid': False})
+#     sns.lineplot(
+#         data=df_avg,
+#         x="Concurrency",
+#         y="Average Tuple Duration (µs)",
+#         marker="o",
+#     )
+#     plt.xlabel('Concurrency')
+#     plt.ylabel('Average Tuple Processing Latency (µs)')
+#     plt.tight_layout()
+#     plt.xticks(ticks=range(df_avg['Concurrency'].min(), df_avg['Concurrency'].max() + 1))
+
+#     plt.savefig(f"tasks/stream/figure/{application}_con_duration.png")
+#     plt.savefig(f"tasks/stream/pdf/{application}_con_duration.pdf")
+#     plt.close()  # Close the figure to prevent overlap
+
+#     # Print the average latency for each concurrency level
+#     print("Average Tuple Duration (µs) for each Concurrency level:")
+#     for index, row in df_avg.iterrows():
+#         print(f"Concurrency: {row['Concurrency']}, Average Latency: {row['Average Tuple Duration (µs)']} µs")
+
+# def overall_plot_util(df, application):
+#     sns.set(style="whitegrid")
+
+#     # Plot 1: Input Rate vs 99th Percentile Actual Time
+#     plt.figure(figsize=(6.4, 4.8))
+#     sns.barplot(
+#         data=df,
+#         x="Input Rate",
+#         y="99th Percentile Actual Time (ms)",
+#         errorbar=None,
+#     )
+
+#     plt.yscale('log')
+#     plt.xlabel('Input Rate (tuples/s)')
+#     plt.ylabel('End-to-end Latency (ms)')
+#     plt.legend(loc='best')  # Adjust legend position
+#     plt.tight_layout()
+#     plt.savefig(f"tasks/stream/figure/{application}_overall_latency.png")
+#     plt.close()
+
+#     # Plot 2: Input Rate vs Throughput
+#     plt.figure(figsize=(6.4, 4.8))
+#     sns.barplot(
+#         data=df,
+#         x="Input Rate",
+#         y="Throughput (msg/sec)",
+#         errorbar=None,
+#     )
+
+#     plt.xlabel('')
+#     plt.ylabel('')
+#     plt.legend(loc='best')  # Adjust legend position
+#     plt.tight_layout()
+#     plt.savefig(f"tasks/stream/figure/{application}_overall_throughput.png")
+#     plt.close()
+
+
+
+def shorten_number(x, pos):
+    if x >= 1000:
+        return f'{x/1000:.0f}k'
+    return f'{x:.0f}'
 
 def varied_con_plot_util(df, application):
-    # Group and calculate mean
-    df_avg = df.groupby('Concurrency', as_index=False)['Average Tuple Duration (µs)'].mean()
+    import matplotlib.ticker as mticker
 
-    plt.figure(figsize=(6.4, 4.8))
     sns.set(style="whitegrid")
+
+    plt.figure(figsize=(10, 6))
+    ax = plt.gca()
     sns.lineplot(
-        data=df_avg,
+        data=df,
         x="Concurrency",
         y="Average Tuple Duration (µs)",
         marker="o",
+        errorbar="sd",
+        err_kws={"capsize": 4, "linewidth": 1.5, "color": "black"},
+        ax=ax
     )
-    plt.xlabel('')
-    plt.ylabel('')
-    plt.tight_layout()
-    plt.xticks(ticks=range(df_avg['Concurrency'].min(), df_avg['Concurrency'].max() + 1))
 
+    plt.xlabel('Concurrency', fontsize=14)
+    plt.ylabel('Average Tuple Processing Latency (µs)', fontsize=14)
+    plt.xticks(ticks=range(df['Concurrency'].min(), df['Concurrency'].max() + 1), fontsize=12)
+    plt.yticks(fontsize=12)
+
+    plt.tight_layout()
     plt.savefig(f"tasks/stream/figure/{application}_con_duration.png")
     plt.savefig(f"tasks/stream/pdf/{application}_con_duration.pdf")
-    plt.close()  # Close the figure to prevent overlap
+    plt.close()
+
+    df_avg = df.groupby('Concurrency', as_index=False)['Average Tuple Duration (µs)'].mean()
+    print("Average Tuple Duration (µs) for each Concurrency level:")
+    for index, row in df_avg.iterrows():
+        print(f"Concurrency: {row['Concurrency']}, Average Latency: {row['Average Tuple Duration (µs)']:.2f} µs")
+
+
+
+def overall_plot_util(df, application):
+    sns.set(style="whitegrid")
+
+    # Plot 1: Input Rate vs 99th Percentile Actual Time
+    plt.figure(figsize=(6.4, 4.8))
+    ax = plt.gca()
+    sns.barplot(
+        data=df,
+        x="Input Rate",
+        y="99th Percentile Actual Time (ms)",
+        errorbar="sd",
+        capsize=0.2,
+        err_kws={"color": "black", "linewidth": 1.5},
+        ax=ax
+    )
+
+    plt.yscale('log')
+    plt.xlabel('Input Rate (tuples/s)', fontsize=12)
+    plt.ylabel('End-to-end Latency (ms)', fontsize=12)
+    ax.xaxis.set_major_formatter(mticker.FuncFormatter(shorten_number))
+    plt.xticks(fontsize=11)
+    plt.yticks(fontsize=11)
+
+    plt.tight_layout()
+    plt.savefig(f"tasks/stream/figure/{application}_overall_latency.png")
+    plt.close()
+
+    # Plot 2: Input Rate vs Throughput
+    plt.figure(figsize=(6.4, 4.8))
+    ax = plt.gca()
+    sns.barplot(
+        data=df,
+        x="Input Rate",
+        y="Throughput (msg/sec)",
+        errorbar="sd",
+        capsize=0.2,
+        err_kws={"color": "black", "linewidth": 1.5},
+        ax=ax
+    )
+
+    plt.xlabel('Input Rate (tuples/s)', fontsize=12)
+    plt.ylabel('Throughput (tuples/s)', fontsize=12)
+    ax.xaxis.set_major_formatter(mticker.FuncFormatter(shorten_number))
+    plt.xticks(fontsize=11)
+    plt.yticks(fontsize=11)
+
+    plt.tight_layout()
+    plt.savefig(f"tasks/stream/figure/{application}_overall_throughput.png")
+    plt.close()

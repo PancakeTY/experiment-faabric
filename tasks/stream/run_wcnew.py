@@ -64,15 +64,19 @@ def read_sentences_from_file(file_path):
         return []
 
     # Remove all non-alphabetic characters and convert to lowercase
-    cleaned_text = re.sub(r'[^a-zA-Z\s]', '', text).lower()
+    cleaned_text = re.sub(r'[^a-zA-Z\s.!?]', '', text).lower()
     
     # Split text into words
-    words = cleaned_text.split()
-    print(f"Total words extracted: {len(words)}")
-
-    # Group words into sentences of 10 words each
-    sentences = [[' '.join(words[i:i+10])] for i in range(0, len(words), 10)]
-    print(f"Total sentences created: {len(sentences)}")
+    sentences = re.split(r'[.!?]', cleaned_text)
+    sentences = [sentence.strip() for sentence in sentences if sentence.strip() and re.search(r'[a-zA-Z]', sentence.strip())]    
+    print(f"Total sentences extracted: {len(sentences)}")
+    if sentences:
+        max_words_sentence = max(sentences, key=lambda s: len(s.split()))
+        print(f"Total sentences extracted: {len(sentences)}")
+        print(f"Sentence with the most words: {max_words_sentence}")
+        print(f"Number of words: {len(max_words_sentence.split())}")
+    else:
+        print("No sentences extracted.")
 
     return sentences
 
@@ -88,111 +92,111 @@ def run(ctx, scale, batchsize, concurrency, inputbatch, input_rate, duration, ma
 
     # Get records
     records = read_sentences_from_file(INPUT_FILE)
-    flush_workers()
-    flush_scheduler()
-    flush_redis()
+    # flush_workers()
+    # flush_scheduler()
+    # flush_redis()
 
-    register_function_state("stream_wordcountindiv_count", "partitionedAttribute", "partitionStateKey")
-    reset_stream_parameter("is_outputting", 0)
-    reset_stream_parameter("max_inflight_reqs", max_inflight_reqs)
+    # register_function_state("stream_wordcountindiv_count", "partitionedAttribute", "partitionStateKey")
+    # reset_stream_parameter("is_outputting", 0)
+    # reset_stream_parameter("max_inflight_reqs", max_inflight_reqs)
 
-    # Run one request at begining
-    input_data = generate_input_data(records, 0, 1, INPUT_MAP)
-    chained_id_return = post_async_batch_msg(100000, INPUT_MSG, batch_size = 1, input_list = input_data, chained_id_list = [1])
-    print(chained_id_return)
-    query_result(chained_id_return[0])
+    # # Run one request at begining
+    # input_data = generate_input_data(records, 0, 1, INPUT_MAP)
+    # chained_id_return = post_async_batch_msg(100000, INPUT_MSG, batch_size = 1, input_list = input_data, chained_id_list = [1])
+    # print(chained_id_return)
+    # query_result(chained_id_return[0])
 
-    # Adjust the parameters
-    if scale > 1:
-        scale_function_parallelism("stream", "wordcountindiv_count" ,scale)
+    # # Adjust the parameters
+    # if scale > 1:
+    #     scale_function_parallelism("stream", "wordcountindiv_count" ,scale)
 
-    if batchsize > 0:
-        reset_batch_size(batchsize)
+    # if batchsize > 0:
+    #     reset_batch_size(batchsize)
     
-    if concurrency > 0:
-        reset_max_replicas(concurrency)
+    # if concurrency > 0:
+    #     reset_max_replicas(concurrency)
 
-    atomic_count = AtomicInteger(1)
-    appid_list = []
-    appid_list_lock = threading.Lock()
-    input_threads = []
+    # atomic_count = AtomicInteger(1)
+    # appid_list = []
+    # appid_list_lock = threading.Lock()
+    # input_threads = []
     
-    batch_queue = Queue()
+    # batch_queue = Queue()
 
-    # Launch multiple threads
-    start_time = time.time()
-    end_time = start_time + duration
-    print(f"Start time: {start_time}")
-    print(f"End time: {end_time}")
-    # Start the ThreadPoolExecutor
-    with ThreadPoolExecutor() as executor:
-        # Submit the batch_producer function to the executor
-        future = executor.submit(
-            batch_producer,
-            records,
-            atomic_count,
-            inputbatch,
-            INPUT_MAP,
-            batch_queue,
-            end_time,
-            input_rate,
-            NUM_INPUT_THREADS
-        )
+    # # Launch multiple threads
+    # start_time = time.time()
+    # end_time = start_time + duration
+    # print(f"Start time: {start_time}")
+    # print(f"End time: {end_time}")
+    # # Start the ThreadPoolExecutor
+    # with ThreadPoolExecutor() as executor:
+    #     # Submit the batch_producer function to the executor
+    #     future = executor.submit(
+    #         batch_producer,
+    #         records,
+    #         atomic_count,
+    #         inputbatch,
+    #         INPUT_MAP,
+    #         batch_queue,
+    #         end_time,
+    #         input_rate,
+    #         NUM_INPUT_THREADS
+    #     )
 
-        # Start consumer threads
-        for _ in range(NUM_INPUT_THREADS):
-            thread = threading.Thread(
-                target=batch_consumer,
-                args=(
-                    batch_queue,
-                    appid_list,
-                    appid_list_lock,
-                    INPUT_MSG,
-                    inputbatch,
-                    end_time,
-                )
-            )
-            input_threads.append(thread)
-            thread.start()
+    #     # Start consumer threads
+    #     for _ in range(NUM_INPUT_THREADS):
+    #         thread = threading.Thread(
+    #             target=batch_consumer,
+    #             args=(
+    #                 batch_queue,
+    #                 appid_list,
+    #                 appid_list_lock,
+    #                 INPUT_MSG,
+    #                 inputbatch,
+    #                 end_time,
+    #             )
+    #         )
+    #         input_threads.append(thread)
+    #         thread.start()
 
-        # Wait for the producer to finish and get the result
-        total_items_produced = future.result()
-        produce_messenger = f"Total items produced: {total_items_produced}"
-        print(produce_messenger)
-        write_string_to_log(RESULT_FILE, produce_messenger)
+    #     # Wait for the producer to finish and get the result
+    #     total_items_produced = future.result()
+    #     produce_messenger = f"Total items produced: {total_items_produced}"
+    #     print(produce_messenger)
+    #     write_string_to_log(RESULT_FILE, produce_messenger)
 
-        # Wait for consumer threads to finish
-        for thread in input_threads:
-            thread.join()
+    #     # Wait for consumer threads to finish
+    #     for thread in input_threads:
+    #         thread.join()
 
-    print("All threads finished")
-    time.sleep(10)
+    # print("All threads finished")
+    # time.sleep(10)
 
-    # Get results from 
-    get_result_start_time = None
-    result_output = False
-    while not result_output:
-        get_result_start_time = time.time()
-        result_output = output_result()
-        time.sleep(5)
+    # # Get results from 
+    # get_result_start_time = None
+    # result_output = False
+    # while not result_output:
+    #     get_result_start_time = time.time()
+    #     result_output = output_result()
+    #     time.sleep(5)
 
-    # Copy the output file from container
-    copy_outout()
-    batches_result = load_app_results()
+    # # Copy the output file from container
+    # copy_outout()
+    # batches_result = load_app_results()
 
-    get_result_end_time = time.time()
-    fetch_result_duration = get_result_end_time - get_result_start_time
-    print(f"Duration to get result: {fetch_result_duration}")
-    np_result_message, function_metrics = statistics_result(batches_result, duration)
-    print(np_result_message)
-    write_string_to_log(RESULT_FILE, np_result_message)
+    # get_result_end_time = time.time()
+    # fetch_result_duration = get_result_end_time - get_result_start_time
+    # print(f"Duration to get result: {fetch_result_duration}")
+    # np_result_message, function_metrics = statistics_result(batches_result, duration)
+    # print(np_result_message)
+    # write_string_to_log(RESULT_FILE, np_result_message)
 
-    for func_name, metrics in function_metrics.items():
-        print(f"Metrics for {func_name}:")
-        for metric_name, times in metrics.items():
-            average_metric_time = sum(times) / len(times) if times else 0
-            print(f"  Average {metric_name}: {int(average_metric_time)} μs")
-    write_metrics_to_log(RESULT_FILE, function_metrics)
+    # for func_name, metrics in function_metrics.items():
+    #     print(f"Metrics for {func_name}:")
+    #     for metric_name, times in metrics.items():
+    #         average_metric_time = sum(times) / len(times) if times else 0
+    #         print(f"  Average {metric_name}: {int(average_metric_time)} μs")
+    # write_metrics_to_log(RESULT_FILE, function_metrics)
 
 # Experiment for overall performance
 @task
@@ -256,7 +260,7 @@ def overall_plot(ctx):
     # print(sorted_df)
 
     duplicates = df[df.duplicated(['Throughput (msg/sec)'], keep=False)]
-    print(duplicates)
+    # print(duplicates)
 
     grouped_counts = df.groupby(['Batch Size', 'Input Rate']).size().reset_index(name='counts')
     print(grouped_counts)
@@ -325,14 +329,12 @@ def varied_batch_plot(ctx):
     df['Throughput (msg/sec)'] = df['Throughput (msg/sec)'].astype(float)
     df['Input Rate'] = df['Input Rate'].replace(9223372036854775807, float('inf'))
 
-    df['Throughput (msg/sec)'] = df['Throughput (msg/sec)'] * 10
-
     pd.set_option('display.max_rows', None)
     sorted_df = df.sort_values(by=['Batch Size', 'Input Rate'])
     # print(sorted_df)
 
     duplicates = df[df.duplicated(['Throughput (msg/sec)'], keep=False)]
-    print(duplicates)
+    # print(duplicates)
 
     grouped_counts = df.groupby(['Batch Size', 'Input Rate']).size().reset_index(name='counts')
     print(grouped_counts)
@@ -399,8 +401,6 @@ def varied_para_plot(ctx):
     df['Scale'] = df['Scale'].astype(int)
     df['99th Percentile Actual Time (ms)'] = df['99th Percentile Actual Time (ms)'].astype(float)
     df['Throughput (msg/sec)'] = df['Throughput (msg/sec)'].astype(float)
-    df['Throughput (msg/sec)'] = df['Throughput (msg/sec)'] * 10
-
     df['Input Rate'] = df['Input Rate'].replace(9223372036854775807, float('inf'))
 
     df = df[df['Input Rate'] != 8000]
@@ -410,7 +410,7 @@ def varied_para_plot(ctx):
     print(sorted_df)
 
     duplicates = df[df.duplicated(['Throughput (msg/sec)'], keep=False)]
-    print(duplicates)
+    # print(duplicates)
 
     grouped_counts = df.groupby(['Scale', 'Input Rate']).size().reset_index(name='counts')
     print(grouped_counts)
