@@ -1,5 +1,6 @@
 from faasmctl.util.config import get_faasm_ini_file as faasmctl_get_faasm_ini_file
 from faasmctl.util.config import get_faasm_ini_value as faasmctl_get_faasm_ini_value
+from faasmctl.util.flush import flush_workers, flush_scheduler
 
 import subprocess
 from subprocess import run
@@ -70,8 +71,13 @@ def flush_redis():
                 text=True               # Decode bytes to string
             )
             # Print the output from the command
-            print('STDOUT:', result.stdout)
-            print('STDERR:', result.stderr)
+            print('Redis FLUSH STDOUT:', result.stdout)
+            print('Redis FLUSH STDERR:', result.stderr)
         except subprocess.CalledProcessError as e:
             # Handle errors in execution
             print('An error occurred:', e.stderr)
+
+def flush_all():
+    flush_workers()
+    flush_scheduler()
+    flush_redis()

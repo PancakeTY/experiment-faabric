@@ -1,10 +1,23 @@
-from faasmctl.util.planner import (
-    get_available_hosts as planner_get_available_hosts,
-    get_in_fligh_apps as planner_get_in_fligh_apps,
-)
+import time
+import threading
+from queue import Queue
+from concurrent.futures import ThreadPoolExecutor
 from math import ceil
 from time import sleep
 
+from tasks.util.thread import AtomicInteger, batch_producer, batch_consumer
+from tasks.util.k8s import flush_all
+from tasks.util.faasm import write_string_to_log
+from faasmctl.util.planner import (
+    register_application,
+    reset_stream_parameter,
+    reset_batch_size,
+    reset_max_replicas,
+    output_result,
+    get_available_hosts as planner_get_available_hosts,
+    get_in_fligh_apps as planner_get_in_fligh_apps,
+    set_persistent_state,
+)
 
 # This method also returns the number of used VMs
 def get_num_idle_cpus_from_in_flight_apps(
@@ -258,3 +271,106 @@ def get_num_xvm_links_from_in_flight_apps(in_flight_apps):
         total_xvm_links += get_xvm_links_from_part(part)
 
     return total_xvm_links
+
+def run_application_with_input(
+    application_name: str,
+    nodes,
+    records,
+    result_file: str,
+    input_map: dict,
+    input_msg: str,
+    num_input_threads: int,
+    scale: int,
+    batchsize: int,
+    concurrency: int,
+    inputbatch: int,
+    input_rate: float,
+    duration: float,
+    persistent_state = None,
+):
+    write_string_to_log(
+        result_file,
+        f"Input Rates:{input_rate}, Batchsize:{batchsize}, "
+        f"Concurrency:{concurrency}, InputBatch:{inputbatch}, Scale:{scale}\n"
+    )
+
+    # Flush the scheduler and workers
+    flush_all()
+
+    register_application(application_name, nodes)
+
+    if persistent_state is not None:
+        set_persistent_state(persistent_state)
+
+    # Reset the parameters
+    reset_stream_parameter("is_outputting", 0)
+    reset_stream_parameter("max_inflight_reqs", 15000)
+    
+    if batchsize > 0:
+        reset_batch_size(batchsize)
+    
+    if concurrency > 0:
+        reset_max_replicas(concurrency)
+
+    # Initialize variables for running application
+    atomic_count = AtomicInteger(1)
+    appid_list = []
+    appid_list_lock = threading.Lock()
+    input_threads = []
+
+    # Launch multiple threads
+    batch_queue = Queue()
+    
+    # Setup the start and end time for the application running
+    start_time = time.time()
+    end_time = start_time + duration
+    print(f"Start time: {start_time}")
+    print(f"End time: {end_time}")
+
+    # Start the ThreadPoolExecutor
+    with ThreadPoolExecutor() as executor:
+        # Submit the batch_producer function to the executor
+        future = executor.submit(
+            batch_producer,
+            records,
+            atomic_count,
+            inputbatch,
+            input_map,
+            batch_queue,
+            end_time,
+            input_rate,
+            num_input_threads
+        )
+
+        # Start consumer threads
+        for _ in range(num_input_threads):
+            thread = threading.Thread(
+                target=batch_consumer,
+                args=(
+                    batch_queue,
+                    appid_list,
+                    appid_list_lock,
+                    input_msg,
+                    inputbatch,
+                    end_time,
+                )
+            )
+            input_threads.append(thread)
+            thread.start()
+
+        # Wait for the producer to finish and get the result
+        total_items_produced = future.result()
+        produce_messenger = f"Total items produced: {total_items_produced}"
+        print(produce_messenger)
+        write_string_to_log(result_file, produce_messenger)
+
+        # Wait for consumer threads to finish
+        for thread in input_threads:
+            thread.join()
+
+    print("All threads finished and waiting for the application to finish...")
+    time.sleep(10)
+
+    stats_result = output_result()
+    print(stats_result)
+    write_string_to_log(result_file, stats_result)
