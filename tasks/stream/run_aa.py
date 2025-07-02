@@ -13,7 +13,7 @@ from faasmctl.util.planner import reset_stream_parameter
 from tasks.util.planner import run_application_with_input
 from tasks.util.faasm import write_string_to_log
 from tasks.util.stats import extract_data
-from tasks.stream.data.aa_data import get_persistent_state
+from tasks.stream.data_generator.aa_data import get_persistent_state
 from tasks.util.file import read_data_from_txt_file
 
 # Static
@@ -131,8 +131,9 @@ def test(ctx, scale=3):
     concurrency = 10
     batchsize = 20
 
-    rates = [2500, 5000, 7500, 10000]
-    schedule_modes = [0,1,2]
+    # rates = [2500, 5000, 7500, 10000]
+    rates = [2500]
+    schedule_modes = [0]
     
     for schedule_mode in schedule_modes:
         reset_stream_parameter("schedule_mode", schedule_mode)

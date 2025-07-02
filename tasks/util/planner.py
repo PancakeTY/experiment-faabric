@@ -272,6 +272,20 @@ def get_num_xvm_links_from_in_flight_apps(in_flight_apps):
 
     return total_xvm_links
 
+def format_nodes(nodes):
+    """
+    Ensure each node dict has keys:
+      - 'input'        (default: None)
+      - 'node_type'    (default: "STATELESS")
+      - 'parallelism'  (default: 1)
+    Leaves all other keys untouched.
+    """
+    for node in nodes:
+        node.setdefault('input', None)
+        node.setdefault('node_type', 'STATELESS')
+        node.setdefault('parallelism', 1)
+    return nodes
+
 def run_application_with_input(
     application_name: str,
     nodes,
@@ -296,6 +310,8 @@ def run_application_with_input(
 
     # Flush the scheduler and workers
     flush_all()
+
+    format_nodes(nodes)
 
     register_application(application_name, nodes)
 

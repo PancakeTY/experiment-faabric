@@ -69,10 +69,49 @@ def load_app_results(file_path: str = 'tasks/stream/tmp/faasm_result.txt') -> Di
         print(f"An unexpected error occurred: {str(e)}")
     return {}
 
+
+def parse_line(line):
+    """
+    Parses a line containing one JSON object and a variable number of
+    other space-separated components.
+
+    Returns:
+        A single list containing all components in order, with the
+        JSON part parsed as a Python dictionary. Returns None if parsing fails.
+    """
+    try:
+        # 1. Find the boundaries of the JSON object.
+        start_index = line.find('{')
+        end_index = line.rfind('}') + 1
+
+        # Return None if the line doesn't contain a JSON object.
+        if start_index == -1 or end_index == 0:
+            return None
+
+        # 2. Extract the three main sections.
+        before_text = line[:start_index]
+        json_string = line[start_index:end_index] # This is the raw string we want to keep
+        after_text = line[end_index:]
+
+        # 3. Process each section.
+        # Split the surrounding text by any whitespace to get the other parts.
+        before_parts = before_text.split()
+        after_parts = after_text.split()
+        
+        # 4. Combine all parts into a single, ordered list.
+        result = before_parts + [json_string] + after_parts
+        
+        return result
+
+    except (ValueError, json.JSONDecodeError):
+        # Handle malformed lines gracefully.
+        print(f"Could not parse line: {line}")
+        return None
+
 def read_data_from_txt_file(file_path):
     data_vectors = []
     with open(file_path, 'r') as file:
         for line in file:
-            data = line.strip().split()
+            data = parse_line(line)
             data_vectors.append(data)
     return data_vectors
