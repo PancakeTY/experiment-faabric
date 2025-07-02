@@ -20,7 +20,7 @@ CUTTING_LINE = "----------------------------------------------------------------
 CURRENT_DATE = datetime.now().strftime("%Y-%m-%d")
 # Mutable
 DURATION = 15
-INPUT_BATCHSIZE = 20
+INPUT_BATCHSIZE = 500
 NUM_INPUT_THREADS = 10
 APPLICATION_NAME = "nwm_application"
 INPUT_FILE = '/pvol/runtime/experiment-faabric/tasks/stream/data/nwm_dataset.txt'
@@ -113,28 +113,28 @@ def run(ctx, scale, batchsize, concurrency, inputbatch, input_rate, duration):
     )
 
 @task
-def test(ctx, scale=3):
-    global DURATION
+def test(ctx, scale=10):
+    global DURATION , INPUT_BATCHSIZE
     global RESULT_FILE
     
-    DURATION = 20
+    DURATION = 60
     RESULT_FILE = 'tasks/stream/logs/nwm_temp_test.txt'
 
     write_string_to_log(RESULT_FILE, CUTTING_LINE)
-    inputbatch = 20
+    INPUT_BATCHSIZE = 500
     concurrency = 10
     batchsize = 20
 
     # rates = [2500, 5000, 7500, 10000]
-    rates = [2500]
-    schedule_modes = [2]
+    rates = [10000]
+    schedule_modes = [0,1,2,0,1,2]
     
     for schedule_mode in schedule_modes:
         reset_stream_parameter("schedule_mode", schedule_mode)
         for rate in rates:
             timestamp = datetime.now().strftime("%d--%b--%Y %H:%M:%S")
-            start_message = f"{timestamp} Running with rate={rate}, batchsize={batchsize}, concurrency={concurrency}, inputbatch={inputbatch}, scale={scale}, duration={DURATION}, schedulemode={schedule_mode}"   
+            start_message = f"{timestamp} Running with rate={rate}, batchsize={batchsize}, concurrency={concurrency}, inputbatch={INPUT_BATCHSIZE}, scale={scale}, duration={DURATION}, schedulemode={schedule_mode}"   
             write_string_to_log(RESULT_FILE, start_message)
             # Call the test_contention task with the current batchsize
-            run(ctx, scale=scale, batchsize=batchsize, concurrency=concurrency, inputbatch=inputbatch, input_rate=rate, duration=DURATION)
+            run(ctx, scale=scale, batchsize=batchsize, concurrency=concurrency, inputbatch=INPUT_BATCHSIZE, input_rate=rate, duration=DURATION)
             print(f"Completed test_contention with con: {concurrency}")
