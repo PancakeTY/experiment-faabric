@@ -320,7 +320,7 @@ def run_application_with_input(
 
     # Reset the parameters
     reset_stream_parameter("is_outputting", 0)
-    reset_stream_parameter("max_inflight_reqs", 15000)
+    reset_stream_parameter("max_inflight_reqs", 50000)
     
     if batchsize > 0:
         reset_batch_size(batchsize)

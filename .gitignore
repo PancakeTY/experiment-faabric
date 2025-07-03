@@ -21,3 +21,10 @@ results/
 
 # Faasm config files
 faasm.ini
+
+# data, log and figures
+tasks/stream/data/
+tasks/stream/logs/
+tasks/stream/figure/
+tasks/stream/pdf/
+tasks/stream/pdf-backup/

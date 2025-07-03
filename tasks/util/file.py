@@ -115,3 +115,11 @@ def read_data_from_txt_file(file_path):
             data = parse_line(line)
             data_vectors.append(data)
     return data_vectors
+    
+def read_data_from_txt_file_noparse(file_path):
+    data_vectors = []
+    with open(file_path, 'r') as file:
+        for line in file:
+            data = line.strip().split()
+            data_vectors.append(data)
+    return data_vectors

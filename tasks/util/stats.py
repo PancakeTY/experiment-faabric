@@ -1,7 +1,7 @@
 import re
-
+import json
+import pandas as pd
 # Input log text
-import re
 
 def extract_data(file_path, function_include=None):
     log_text = ""
@@ -173,4 +173,82 @@ def print_data(data):
             entry.get('Average Duration (µs)', 'N/A'),
             entry.get('Throughput (msg/sec)', 0),
         ))
+
+def parse_log(path):
+    try:
+        with open(path, 'r') as file:
+            log_data = file.read()
+    except FileNotFoundError:
+        print(f"Error: The file at '{path}' was not found. 🤷")
+        return pd.DataFrame()
+    except Exception as e:
+        print(f"An error occurred while reading the file: {e}")
+        return pd.DataFrame()
         
+    # Regex to find the start of each experimental run's log
+    run_delimiter_pattern = re.compile(r'\d{2}--\w{3}--\d{4} \d{2}:\d{2}:\d{2} Running with')
+
+    # Split the entire log data into chunks, one for each run.
+    # We discard the first element as it will be empty.
+    log_chunks = run_delimiter_pattern.split(log_data)[1:]
+
+    # This list will hold the structured data from each run
+    parsed_results = []
+
+    # Regex to capture the parameters from the "Running with" line
+    params_pattern = re.compile(
+        r"rate=(?P<rate>\d+), "
+        r"batchsize=(?P<batchsize>\d+), "
+        r"concurrency=(?P<concurrency>\d+), "
+        r"inputbatch=(?P<inputbatch>\d+), "
+        r"scale=(?P<scale>\d+), "
+        r"duration=(?P<duration>\d+), "
+        r"schedulemode=(?P<schedulemode>\d+)"
+    )
+
+    for chunk in log_chunks:
+        # Match the parameters at the beginning of the chunk
+        params_match = params_pattern.search(chunk)
+
+        # Find the starting '{' of the JSON data
+        json_start_index = chunk.find('{')
+
+        if params_match and json_start_index != -1:
+            # Extract the parameter values
+            run_data = params_match.groupdict()
+
+            # Extract and parse the JSON string
+            json_str = chunk[json_start_index:]
+            try:
+                # The full JSON is very large, so we parse it and only keep what we need
+                metrics_data = json.loads(json_str)
+
+                # Update the dictionary with performance metrics
+                run_data['throughput'] = metrics_data.get('throughput')
+                run_data['medianLatency'] = metrics_data.get('medianLatency')
+                run_data['p95Latency'] = metrics_data.get('p95Latency')
+                run_data['p99Latency'] = metrics_data.get('p99Latency')
+
+                # Add the fully parsed data for this run to our results list
+                parsed_results.append(run_data)
+            except json.JSONDecodeError:
+                print(f"Warning: Could not parse JSON in a chunk:\n{chunk[:100]}...")
+
+    # For a clean, tabular view, we use the pandas DataFrame
+    # This is highly recommended for data analysis
+    df = pd.DataFrame(parsed_results)
+
+    # Convert columns to appropriate numeric types
+    for col in df.columns:
+        df[col] = pd.to_numeric(df[col], errors='ignore')
+
+    # Display the final table
+    print(df)
+    return df 
+
+def average_metrics(df):
+    statistics_df = df.groupby(['rate', 'schedulemode'])[['throughput', 'p99Latency']].mean()
+
+    # Display the resulting statistics
+    print("📊 Average Throughput and p99Latency:")
+    print(statistics_df)

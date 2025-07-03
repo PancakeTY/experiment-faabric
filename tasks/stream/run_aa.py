@@ -12,9 +12,9 @@ import seaborn as sns
 from faasmctl.util.planner import reset_stream_parameter
 from tasks.util.planner import run_application_with_input
 from tasks.util.faasm import write_string_to_log
-from tasks.util.stats import extract_data
 from tasks.stream.data_generator.aa_data import get_persistent_state
-from tasks.util.file import read_data_from_txt_file
+from tasks.util.file import read_data_from_txt_file_noparse
+from tasks.util.stats import parse_log, average_metrics
 
 # Static
 CUTTING_LINE = "-------------------------------------------------------------------------------"
@@ -22,7 +22,7 @@ CURRENT_DATE = datetime.now().strftime("%Y-%m-%d")
 # Mutable
 DURATION = 15
 INPUT_BATCHSIZE = 500
-NUM_INPUT_THREADS = 10
+NUM_INPUT_THREADS = 15
 APPLICATION_NAME = "aa_application"
 INPUT_FILE = '/pvol/runtime/experiment-faabric/tasks/stream/data/aa_dataset.txt'
 INPUT_MSG = {
@@ -57,7 +57,7 @@ def run(ctx, scale, batchsize, concurrency, inputbatch, input_rate, duration):
     global APPLICATION_NAME, INPUT_FILE, INPUT_MSG, RESULT_FILE, INPUT_MAP, NUM_INPUT_THREADS
 
     # Prepare the input data
-    raw_records = read_data_from_txt_file(INPUT_FILE)
+    raw_records = read_data_from_txt_file_noparse(INPUT_FILE)
     # records
     records = [enwrap_json(record) for record in raw_records]
 
@@ -127,13 +127,13 @@ def test(ctx, scale=10):
     RESULT_FILE = 'tasks/stream/logs/aa_temp_test.txt'
 
     write_string_to_log(RESULT_FILE, CUTTING_LINE)
-    INPUT_BATCHSIZE = 500
+    INPUT_BATCHSIZE = 10000
     concurrency = 10
     batchsize = 20
 
     # rates = [2500, 5000, 7500, 10000]
-    rates = [20000]
-    schedule_modes = [0]
+    rates = [50000]
+    schedule_modes = [0, 1, 2, 0, 1, 2, 0, 1, 2]
     
     for schedule_mode in schedule_modes:
         reset_stream_parameter("schedule_mode", schedule_mode)
@@ -144,3 +144,10 @@ def test(ctx, scale=10):
             # Call the test_contention task with the current batchsize
             run(ctx, scale=scale, batchsize=batchsize, concurrency=concurrency, inputbatch=INPUT_BATCHSIZE, input_rate=rate, duration=DURATION)
             print(f"Completed test_contention with con: {concurrency}")
+
+@task
+def stats(ctx):
+    RESULT_FILE = 'tasks/stream/logs/aa_temp_test.txt'
+    df = parse_log(RESULT_FILE)
+
+    average_metrics(df)
