@@ -270,7 +270,7 @@ def has_app_failed(results_json):
     return False
     # return any([result_json["returnValue"] for result_json in results_json])
 
-def post_async_batch_msg(app_id, msg, batch_size=1, input_list=None, chained_id_list= None):
+def post_async_batch_msg(app_id, msg, batch_size=1, input_list=None, chained_id_list= None, end_time = None):
     if batch_size != len(input_list):
         print ("ERROR: batch_size != len(input_data)")
         assert False
@@ -279,7 +279,7 @@ def post_async_batch_msg(app_id, msg, batch_size=1, input_list=None, chained_id_
         assert False
     chained_id_list = faasmctl_invoke_wasm_messages(app_id, msg_dict=msg, num_messages=batch_size, 
                                               input_list=input_list, chained_id_list=chained_id_list,
-                                              num_retries = 10000, sleep_period_secs=0.05)
+                                              num_retries = 10000, sleep_period_secs=0.5, end_time=end_time)
     return chained_id_list
 
 def write_metrics_to_log(path, function_metrics):

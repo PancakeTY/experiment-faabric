@@ -12,8 +12,10 @@ import seaborn as sns
 from faasmctl.util.planner import reset_stream_parameter
 from tasks.util.planner import run_application_with_input
 from tasks.util.faasm import write_string_to_log
-from tasks.util.stats import extract_data
-from tasks.util.file import read_data_from_txt_file
+from tasks.util.file import (
+    read_data_from_txt_file,
+    read_persistent_state_from_txt_file,
+)
 
 # Static
 CUTTING_LINE = "-------------------------------------------------------------------------------"
@@ -22,16 +24,17 @@ CURRENT_DATE = datetime.now().strftime("%Y-%m-%d")
 DURATION = 15
 INPUT_BATCHSIZE = 500
 NUM_INPUT_THREADS = 10
-APPLICATION_NAME = "nwm_application"
+APPLICATION_NAME = "etl_application"
 INPUT_FILE = (
-    "/pvol/runtime/experiment-faabric/tasks/stream/data/nwm_dataset.txt"
+    "/pvol/runtime/experiment-faabric/tasks/stream/data/etl_dataset.txt"
 )
+PERSISTENT_OUTPUT_PATH = "/pvol/runtime/experiment-faabric/tasks/stream/data/etl_persistent_data.txt"
 INPUT_MSG = {
     "user": "stream",
-    "function": "nwm_parse_lines",
+    "function": "etl_senml_parse",
 }
-RESULT_FILE = "tasks/stream/logs/exp_nwm_results.txt"
-INPUT_MAP = {"json": 0}
+RESULT_FILE = "tasks/stream/logs/exp_etl_results.txt"
+INPUT_MAP = {"msg_id": 0, "json": 1}
 
 
 @task
@@ -44,70 +47,82 @@ def run(ctx, scale, batchsize, concurrency, inputbatch, input_rate, duration):
 
     # Prepare the input data
     records = read_data_from_txt_file(INPUT_FILE)
+    persistent_state = read_persistent_state_from_txt_file(
+        PERSISTENT_OUTPUT_PATH
+    )
 
     print(records[0])  # Print first 10 records for debugging
 
     node1 = {
-        "name": "stream_nwm_parse_lines",
+        "name": "stream_etl_senml_parse",
         "input": True,
-        "inputFields": ["json"],
-        "successorNode": ["stream_nwm_split"],
+        "inputFields": ["msg_id", "json"],
+        "successorNode": ["stream_etl_filter_range"],
     }
     node2 = {
-        "name": "stream_nwm_split",
-        "inputFields": ["host", "status", "method", "region", "event_time"],
-        "successorNode": [
-            "stream_nwm_success_filter",
-            "stream_nwm_fail_filter",
-        ],
+        "name": "stream_etl_filter_range",
+        "node_type": "PARTITIONED_STATEFUL",
+        "partitionBy": "obs_type",
+        "parallelism": scale,
+        "inputFields": ["msg_id", "sensor_id", "meta", "obs_type", "obs_val"],
+        "successorNode": ["stream_etl_filter_bloom"],
     }
     node3 = {
-        "name": "stream_nwm_success_filter",
-        "inputFields": ["host", "status", "method", "region", "event_time"],
-        "successorNode": ["stream_nwm_success_parse"],
+        "name": "stream_etl_filter_bloom",
+        "node_type": "PARTITIONED_STATEFUL",
+        "partitionBy": "obs_type",
+        "parallelism": scale,
+        "inputFields": ["msg_id", "sensor_id", "meta", "obs_type", "obs_val"],
+        "successorNode": ["stream_etl_interpolation"],
     }
     node4 = {
-        "name": "stream_nwm_success_parse",
-        "inputFields": ["host", "status", "method", "region", "event_time"],
-        "successorNode": ["stream_nwm_join"],
+        "name": "stream_etl_interpolation",
+        "node_type": "PARTITIONED_STATEFUL",
+        "partitionBy": "obs_type_sensor_id",
+        "parallelism": scale,
+        "inputFields": [
+            "obs_type_sensor_id",
+            "msg_id",
+            "sensor_id",
+            "meta",
+            "obs_type",
+            "obs_val",
+        ],
+        "successorNode": ["stream_etl_join"],
     }
     node5 = {
-        "name": "stream_nwm_fail_filter",
-        "inputFields": ["host", "status", "method", "region", "event_time"],
-        "successorNode": ["stream_nwm_fail_parse"],
+        "name": "stream_etl_join",
+        "node_type": "PARTITIONED_STATEFUL",
+        "partitionBy": "msg_id",
+        "parallelism": scale,
+        "inputFields": ["msg_id", "sensor_id", "meta", "obs_type", "obs_val"],
+        "successorNode": ["stream_etl_annotate"],
     }
     node6 = {
-        "name": "stream_nwm_fail_parse",
-        "inputFields": ["host", "status", "method", "region", "event_time"],
-        "successorNode": ["stream_nwm_fail_aggregation"],
+        "name": "stream_etl_annotate",
+        "inputFields": ["msg_id", "obs_type", "obs_val"],
+        "successorNode": ["stream_etl_csv2ml", "stream_etl_azure"],
     }
     node7 = {
-        "name": "stream_nwm_fail_aggregation",
-        "node_type": "PARTITIONED_STATEFUL",
-        "partitionBy": "host",
-        "parallelism": scale,
-        "inputFields": ["host", "event_time"],
-        "successorNode": ["stream_nwm_fail_aggrfilter"],
+        "name": "stream_etl_csv2ml",
+        "inputFields": ["msg_id", "obs_type", "obs_val"],
+        "successorNode": ["stream_etl_mqtt"],
     }
     node8 = {
-        "name": "stream_nwm_fail_aggrfilter",
-        "inputFields": ["host", "event_time"],
-        "successorNode": ["stream_nwm_fail_functor"],
+        "name": "stream_etl_mqtt",
+        "inputFields": ["msg_id", "obs_type", "obs_val"],
+        "successorNode": ["stream_etl_sink"],
     }
     node9 = {
-        "name": "stream_nwm_fail_functor",
-        "node_type": "PARTITIONED_STATEFUL",
-        "partitionBy": "host",
+        "name": "stream_etl_azure",
+        "node_type": "STATEFUL",
         "parallelism": scale,
-        "inputFields": ["host", "event_time"],
-        "successorNode": ["stream_nwm_join"],
+        "inputFields": ["msg_id", "obs_type", "obs_val"],
+        "successorNode": ["stream_etl_sink"],
     }
     node10 = {
-        "name": "stream_nwm_join",
-        "node_type": "PARTITIONED_STATEFUL",
-        "partitionBy": "host",
-        "parallelism": scale,
-        "inputFields": ["host", "event_time", "type", "is_first"],
+        "name": "stream_etl_sink",
+        "inputFields": ["msg_id", "obs_type", "obs_val"],
         "successorNode": [],
     }
     nodes = [
@@ -137,25 +152,26 @@ def run(ctx, scale, batchsize, concurrency, inputbatch, input_rate, duration):
         inputbatch=inputbatch,
         input_rate=input_rate,
         duration=duration,
+        persistent_state=persistent_state,
     )
 
 
 @task
-def test(ctx, scale=10):
+def test(ctx, scale=2):
     global DURATION, INPUT_BATCHSIZE
     global RESULT_FILE
 
-    DURATION = 15
-    RESULT_FILE = "tasks/stream/logs/nwm_temp_test.txt"
+    DURATION = 60
+    RESULT_FILE = "tasks/stream/logs/etl_temp_test.txt"
 
     write_string_to_log(RESULT_FILE, CUTTING_LINE)
-    INPUT_BATCHSIZE = 300
-    concurrency = 10
+    INPUT_BATCHSIZE = 5000
+    concurrency = 5
     batchsize = 20
 
     # rates = [2500, 5000, 7500, 10000]
-    rates = [10000]
-    schedule_modes = [0]
+    rates = [50000]
+    schedule_modes = [0, 1, 2]
 
     for schedule_mode in schedule_modes:
         reset_stream_parameter("schedule_mode", schedule_mode)

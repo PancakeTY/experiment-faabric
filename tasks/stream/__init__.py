@@ -2,6 +2,7 @@ from invoke import Collection
 
 from . import run_aa
 from . import run_nwm
+from . import run_etl
 from . import run_wc
 from . import run_mo
 from . import run_sd
@@ -14,6 +15,7 @@ from . import custom_plot
 ns = Collection(
     run_aa,
     run_nwm,
+    run_etl,
     run_wc,
     run_mo,
     run_sd,

@@ -1,9 +1,11 @@
 import time
 import threading
+import json
 from queue import Queue
 from concurrent.futures import ThreadPoolExecutor
 from math import ceil
 from time import sleep
+from collections import defaultdict
 
 from tasks.util.thread import AtomicInteger, batch_producer, batch_consumer
 from tasks.util.k8s import flush_all
@@ -18,6 +20,7 @@ from faasmctl.util.planner import (
     get_in_fligh_apps as planner_get_in_fligh_apps,
     set_persistent_state,
 )
+
 
 # This method also returns the number of used VMs
 def get_num_idle_cpus_from_in_flight_apps(
@@ -272,6 +275,7 @@ def get_num_xvm_links_from_in_flight_apps(in_flight_apps):
 
     return total_xvm_links
 
+
 def format_nodes(nodes):
     """
     Ensure each node dict has keys:
@@ -281,10 +285,11 @@ def format_nodes(nodes):
     Leaves all other keys untouched.
     """
     for node in nodes:
-        node.setdefault('input', None)
-        node.setdefault('node_type', 'STATELESS')
-        node.setdefault('parallelism', 1)
+        node.setdefault("input", None)
+        node.setdefault("node_type", "STATELESS")
+        node.setdefault("parallelism", 1)
     return nodes
+
 
 def run_application_with_input(
     application_name: str,
@@ -300,12 +305,12 @@ def run_application_with_input(
     inputbatch: int,
     input_rate: float,
     duration: float,
-    persistent_state = None,
+    persistent_state=None,
 ):
     write_string_to_log(
         result_file,
         f"Input Rates:{input_rate}, Batchsize:{batchsize}, "
-        f"Concurrency:{concurrency}, InputBatch:{inputbatch}, Scale:{scale}\n"
+        f"Concurrency:{concurrency}, InputBatch:{inputbatch}, Scale:{scale}\n",
     )
 
     # Flush the scheduler and workers
@@ -321,12 +326,10 @@ def run_application_with_input(
     # Reset the parameters
     reset_stream_parameter("is_outputting", 0)
     reset_stream_parameter("max_inflight_reqs", 50000)
-    
+    reset_stream_parameter("max_executors", 80)
+    reset_stream_parameter("max_replicas", concurrency)
     if batchsize > 0:
         reset_batch_size(batchsize)
-    
-    if concurrency > 0:
-        reset_max_replicas(concurrency)
 
     # Initialize variables for running application
     atomic_count = AtomicInteger(1)
@@ -336,7 +339,7 @@ def run_application_with_input(
 
     # Launch multiple threads
     batch_queue = Queue()
-    
+
     # Setup the start and end time for the application running
     start_time = time.time()
     end_time = start_time + duration
@@ -355,7 +358,7 @@ def run_application_with_input(
             batch_queue,
             end_time,
             input_rate,
-            num_input_threads
+            num_input_threads,
         )
 
         # Start consumer threads
@@ -369,7 +372,7 @@ def run_application_with_input(
                     input_msg,
                     inputbatch,
                     end_time,
-                )
+                ),
             )
             input_threads.append(thread)
             thread.start()
@@ -387,6 +390,27 @@ def run_application_with_input(
     print("All threads finished and waiting for the application to finish...")
     time.sleep(10)
 
-    stats_result = output_result()
+    stats_result_str = output_result()
+
+    # Process the output
+    stats_dict = json.loads(stats_result_str)
+    duration = (stats_dict["endTime"] - stats_dict["startTime"]) / 1_000_000
+    stats_dict["execution_duration"] = duration
+
+    # Use defaultdict to simplify the summation
+    operator_statistics = defaultdict(int)
+
+    # Iterate through each instance's data dictionary
+    for instance_name, instance_data in stats_dict["instances"].items():
+        # Extract the base operator name (e.g., "stream_etl_join_0" -> "stream_etl_join")
+        operator_name = instance_name.rsplit("_", 1)[0]
+
+        # Add the instance's 'count' to the operator's total
+        operator_statistics[operator_name] += instance_data.get("count", 0)
+
+    # Add the final sums back to the main dictionary
+    stats_dict["operatorStatistics"] = dict(operator_statistics)
+    stats_result = json.dumps(stats_dict, indent=4)
+
     print(stats_result)
     write_string_to_log(result_file, stats_result)
