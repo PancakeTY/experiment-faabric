@@ -1,25 +1,32 @@
 import time
 import threading
 import json
+import math
 from queue import Queue
 from concurrent.futures import ThreadPoolExecutor
 from math import ceil
 from time import sleep
 from collections import defaultdict
 
-from tasks.util.thread import AtomicInteger, batch_producer, batch_consumer
+from tasks.util.thread import (
+    AtomicInteger,
+    token_producer,
+    batch_producer,
+    batch_consumer,
+)
 from tasks.util.k8s import flush_all
 from tasks.util.faasm import write_string_to_log
 from faasmctl.util.planner import (
     register_application,
     reset_stream_parameter,
     reset_batch_size,
-    reset_max_replicas,
     output_result,
     get_available_hosts as planner_get_available_hosts,
     get_in_fligh_apps as planner_get_in_fligh_apps,
     set_persistent_state,
 )
+from tasks.util.faasm import generate_input_data
+from faasmctl.util.batch import get_msg_from_input_data
 
 
 # This method also returns the number of used VMs
@@ -313,6 +320,35 @@ def run_application_with_input(
         f"Concurrency:{concurrency}, InputBatch:{inputbatch}, Scale:{scale}\n",
     )
 
+    print("Pre-generating all JSON payloads...")
+    pregenerated_work = []
+    num_batches = math.floor(len(records) / inputbatch)
+
+    for i in range(1, num_batches + 1):
+        start_idx = (i - 1) * inputbatch
+
+        input_data_list = generate_input_data(
+            records, start_idx, inputbatch, input_map
+        )
+        chained_id_list = [
+            j for j in range(start_idx + 1, start_idx + inputbatch + 1)
+        ]
+        app_id = start_idx + 1
+
+        # ✨ 2. Create the final payload
+        msg_json = get_msg_from_input_data(
+            app_id,
+            input_msg,
+            inputbatch,
+            input_data_list,
+            chained_id_list,
+        )
+
+        # ✨ 3. Store the (app_id, json_payload) tuple
+        pregenerated_work.append((app_id, msg_json))
+
+    print(f"Pre-generation complete: {len(pregenerated_work)} payloads.")
+
     # Flush the scheduler and workers
     flush_all()
 
@@ -332,13 +368,12 @@ def run_application_with_input(
         reset_batch_size(batchsize)
 
     # Initialize variables for running application
-    atomic_count = AtomicInteger(1)
-    appid_list = []
-    appid_list_lock = threading.Lock()
+    atomic_counter = AtomicInteger(1)
     input_threads = []
 
     # Launch multiple threads
-    batch_queue = Queue()
+    batch_queue = Queue(maxsize=num_input_threads * 2)  # Bounded queue
+    token_queue = Queue()
 
     # Setup the start and end time for the application running
     start_time = time.time()
@@ -346,46 +381,49 @@ def run_application_with_input(
     print(f"Start time: {start_time}")
     print(f"End time: {end_time}")
 
+    num_producer_threads = 1
+
     # Start the ThreadPoolExecutor
     with ThreadPoolExecutor() as executor:
-        # Submit the batch_producer function to the executor
-        future = executor.submit(
-            batch_producer,
-            records,
-            atomic_count,
-            inputbatch,
-            input_map,
-            batch_queue,
-            end_time,
+
+        executor.submit(
+            token_producer,
+            token_queue,
             input_rate,
-            num_input_threads,
+            inputbatch,
+            duration,
+            num_producer_threads,
         )
 
-        # Start consumer threads
-        for _ in range(num_input_threads):
-            thread = threading.Thread(
-                target=batch_consumer,
-                args=(
-                    batch_queue,
-                    appid_list,
-                    appid_list_lock,
-                    input_msg,
-                    inputbatch,
-                    end_time,
-                ),
-            )
-            input_threads.append(thread)
-            thread.start()
+        producer_future = executor.submit(
+            batch_producer,
+            pregenerated_work,
+            token_queue,
+            batch_queue,
+            atomic_counter,
+            num_input_threads,
+            end_time,
+        )
 
+        # 4. Start consumer threads
+        consumer_futures = []
+        for _ in range(num_input_threads):
+            future = executor.submit(
+                batch_consumer,
+                batch_queue,
+                end_time,
+            )
+            consumer_futures.append(future)
+
+        batches_produced = producer_future.result()
         # Wait for the producer to finish and get the result
-        total_items_produced = future.result()
+        total_items_produced = batches_produced * inputbatch
         produce_messenger = f"Total items produced: {total_items_produced}"
         print(produce_messenger)
         write_string_to_log(result_file, produce_messenger)
 
-        # Wait for consumer threads to finish
-        for thread in input_threads:
-            thread.join()
+        for future in consumer_futures:
+            future.result()  # This will block until the consumer has exited
 
     print("All threads finished and waiting for the application to finish...")
     time.sleep(10)

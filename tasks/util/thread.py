@@ -1,4 +1,9 @@
-from tasks.util.faasm import generate_input_data, post_async_batch_msg, post_async_msg_and_get_result_json
+from tasks.util.faasm import (
+    generate_input_data,
+    post_async_batch_msg,
+    post_async_msg_and_get_result_json,
+)
+from faasmctl.util.invoke import invoke_by_consumer
 
 import threading
 import time
@@ -17,67 +22,104 @@ class AtomicInteger:
             return current_value
 
 
-def batch_producer(records, atomic_count, input_batchsize, input_map, batch_queue, end_time, rate, num_consumers):
-    batch_interval = input_batchsize / rate  # Interval between batches in seconds
-    next_batch_time = time.time()
-    total_items_produced = 0  # Initialize a counter for total items produced
+def token_producer(token_queue, rate, batch_size, duration, num_producers):
+    """
+    Produces tokens at a fixed rate to control the producers.
+    Each token represents one batch.
+    """
+    start_time = time.time()
+    end_time = start_time + duration
+
+    # Calculate the interval between each batch to meet the overall item rate
+    batches_per_second = rate / batch_size
+    interval = 1.0 / batches_per_second if batches_per_second > 0 else 0
 
     while time.time() < end_time:
-        now = time.time()
-        sleep_time = next_batch_time - now
-        if sleep_time > 0:
-            time.sleep(sleep_time)
-            now = time.time()  # Update now after sleeping
-        
-        break_flag = False
-        # Produce batches until we're back on schedule
-        while now >= next_batch_time:
-            input_index = atomic_count.get_and_increment(input_batchsize)
-            if input_index + input_batchsize >= len(records):
-                break_flag = True
+        if interval > 0:
+            time.sleep(interval)
+        token_queue.put(1)  # The token can be any value, it's just a signal
+
+    # Signal all producer threads to stop
+    for _ in range(num_producers):
+        token_queue.put(None)
+
+
+def batch_producer(
+    pregenerated_work,
+    token_queue,
+    batch_queue,
+    atomic_counter,
+    num_consumers,
+    end_time,
+):
+    """
+    Waits for a token, then fetches a pre-generated batch and puts it on the
+    work queue for consumers. Returns the number of batches produced.
+    """
+    batches_produced = 0
+
+    try:
+        while time.time() < end_time:
+            token = token_queue.get()
+            if token is None:
                 break
-            input_data_list = generate_input_data(records, input_index, input_batchsize, input_map)
-            chained_id_list = [input_index + i for i in range(input_batchsize)]
-            # Put batch data into queue
-            batch_queue.put((input_index, input_data_list, chained_id_list))
-            total_items_produced += input_batchsize
-            # Update next_batch_time for the next batch
-            next_batch_time += batch_interval
-            # Update now to reflect the current time after processing
-            now = time.time()
 
-        if break_flag:
-            break
+            work_index = atomic_counter.get_and_increment()
+            if work_index >= len(pregenerated_work):
+                break
 
-    # After production is done, signal consumers to exit
-    for _ in range(num_consumers):
-        batch_queue.put(None)
-    print(f"Batch producer finished. Total items produced: {total_items_produced}")
-    return total_items_produced
+            batch_queue.put(pregenerated_work[work_index])
+            batches_produced += 1
+    finally:
+        # ✨ This block is crucial. It runs when the loop breaks.
+        # Signal all consumer threads that production is finished.
+        print(
+            f"Producer finished. Signaling {num_consumers} consumers to stop."
+        )
+        for _ in range(num_consumers):
+            batch_queue.put(None)
+
+    return batches_produced
 
 
-def batch_consumer(batch_queue, appid_list, appid_list_lock, INPUT_MSG, input_batchsize, end_time):
-    while True:
-        batch_data = batch_queue.get()  # Blocking call, waits indefinitely
-        if batch_data is None:
+def batch_consumer(batch_queue, end_time):
+    # This consumer now takes the planner URL directly
+    # local_appid_list = []
+    while time.time() < end_time:
+        work_item = batch_queue.get()
+        if work_item is None:
             # Sentinel value received, exit the thread
             batch_queue.task_done()
-            break  # Use break instead of return for clarity
-        input_index, input_data, chained_id_list = batch_data
-        # Send batch async message
-        chained_id_return = post_async_batch_msg(input_index, INPUT_MSG, input_batchsize, input_data, chained_id_list, end_time=end_time)
-        # Update shared resources safely
-        if chained_id_return is not None:
-            with appid_list_lock:
-                appid_list.extend(chained_id_return)
+            break
+
+        app_id, msg_json = work_item
+
+        print(f"Processing app_id: {app_id} ")
+        invoke_by_consumer(
+            msg_json,
+            num_retries=1000,
+            sleep_period_secs=0.1,
+            end_time=end_time,
+        )
+
+        # Append to a local list to minimize locking
+        # local_appid_list.append(app_id)
         batch_queue.task_done()
 
-        # If the end time is reached, return.
-        now = time.time()
-        if now > end_time + 1:
-            break
+    # After the loop, acquire the lock ONCE to update the global list
+    # if local_appid_list:
+    #     with appid_list_lock:
+    #         appid_list.extend(local_appid_list)
 
-def native_batch_consumer(batch_queue, result_list, result_list_lock, INPUT_MSG, input_batchsize, end_time):
+
+def native_batch_consumer(
+    batch_queue,
+    result_list,
+    result_list_lock,
+    INPUT_MSG,
+    input_batchsize,
+    end_time,
+):
     while True:
         batch_data = batch_queue.get()  # Blocking call, waits indefinitely
         if batch_data is None:
@@ -86,7 +128,12 @@ def native_batch_consumer(batch_queue, result_list, result_list_lock, INPUT_MSG,
             break  # Use break instead of return for clarity
         input_index, input_data, chained_id_list = batch_data
         # Send batch async message
-        is_finished, result_json = post_async_msg_and_get_result_json(INPUT_MSG, num_message = input_batchsize, input_list=input_data, chainedId_list = chained_id_list)
+        is_finished, result_json = post_async_msg_and_get_result_json(
+            INPUT_MSG,
+            num_message=input_batchsize,
+            input_list=input_data,
+            chainedId_list=chained_id_list,
+        )
 
         if is_finished:
             with result_list_lock:
