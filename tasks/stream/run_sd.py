@@ -5,7 +5,8 @@ from faasmctl.util.planner import reset_stream_parameter
 from tasks.util.planner import run_application_with_input
 from tasks.util.faasm import write_string_to_log
 from tasks.util.file import read_data_from_txt_file_noparse
-
+from tasks.util.stats import parse_log, average_metrics
+from tasks.util.plot import plot_stats
 
 # Static
 CUTTING_LINE = "-------------------------------------------------------------------------------"
@@ -78,7 +79,7 @@ def test(ctx, scale=2):
     global DURATION, INPUT_BATCHSIZE
     global RESULT_FILE
 
-    DURATION = 15
+    DURATION = 100
     RESULT_FILE = "tasks/stream/logs/sd_temp_test.txt"
 
     write_string_to_log(RESULT_FILE, CUTTING_LINE)
@@ -88,7 +89,7 @@ def test(ctx, scale=2):
 
     # rates = [2500, 5000, 7500, 10000]
     rates = [100000]
-    schedule_modes = [0, 1, 2]
+    schedule_modes = [0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2]
 
     for schedule_mode in schedule_modes:
         reset_stream_parameter("schedule_mode", schedule_mode)
@@ -108,3 +109,13 @@ def test(ctx, scale=2):
                 duration=DURATION,
             )
             print(f"Completed test_contention with con: {concurrency}")
+
+
+@task
+def stats(ctx):
+    RESULT_FILE = "tasks/stream/logs/sd_temp_test.txt"
+    df = parse_log(RESULT_FILE)
+
+    average_metrics(df)
+
+    plot_stats("sd", df)

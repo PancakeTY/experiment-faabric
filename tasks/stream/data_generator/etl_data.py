@@ -10,7 +10,7 @@ OUTPUT_PATH = (
 )
 
 # Define the number of data rows to generate.
-NUM_ROWS = 1000000
+NUM_ROWS = 2000000
 
 # Define the ranges for the random data generation.
 MSG_ID_RANGE = (100, 301)

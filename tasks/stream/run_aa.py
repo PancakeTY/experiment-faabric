@@ -15,6 +15,7 @@ from tasks.util.faasm import write_string_to_log
 from tasks.stream.data_generator.aa_data import get_persistent_state
 from tasks.util.file import read_data_from_txt_file_noparse
 from tasks.util.stats import parse_log, average_metrics
+from tasks.util.plot import plot_stats
 
 # Static
 CUTTING_LINE = "-------------------------------------------------------------------------------"
@@ -131,21 +132,21 @@ def run(ctx, scale, batchsize, concurrency, inputbatch, input_rate, duration):
 
 
 @task
-def test(ctx, scale=10):
+def test(ctx, scale=5):
     global DURATION, INPUT_BATCHSIZE
     global RESULT_FILE
 
-    DURATION = 60
+    DURATION = 100
     RESULT_FILE = "tasks/stream/logs/aa_temp_test.txt"
 
     write_string_to_log(RESULT_FILE, CUTTING_LINE)
-    INPUT_BATCHSIZE = 10000
+    INPUT_BATCHSIZE = 5000
     concurrency = 10
     batchsize = 20
 
     # rates = [2500, 5000, 7500, 10000]
     rates = [50000]
-    schedule_modes = [0, 1, 2, 0, 1, 2, 0, 1, 2]
+    schedule_modes = [0, 1, 2, 0, 1, 2]
 
     for schedule_mode in schedule_modes:
         reset_stream_parameter("schedule_mode", schedule_mode)
@@ -172,3 +173,5 @@ def stats(ctx):
     df = parse_log(RESULT_FILE)
 
     average_metrics(df)
+
+    plot_stats("aa", df)

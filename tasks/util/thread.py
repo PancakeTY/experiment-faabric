@@ -86,7 +86,11 @@ def batch_consumer(batch_queue, end_time):
     # This consumer now takes the planner URL directly
     # local_appid_list = []
     while time.time() < end_time:
-        work_item = batch_queue.get()
+        try:
+            work_item = batch_queue.get(timeout=5)
+        except Empty:
+            continue
+
         if work_item is None:
             # Sentinel value received, exit the thread
             batch_queue.task_done()

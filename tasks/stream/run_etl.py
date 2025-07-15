@@ -5,9 +5,6 @@ from invoke import task
 from queue import Queue
 from concurrent.futures import ThreadPoolExecutor
 import json
-import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
 
 from faasmctl.util.planner import reset_stream_parameter
 from tasks.util.planner import run_application_with_input
@@ -16,6 +13,8 @@ from tasks.util.file import (
     read_data_from_txt_file,
     read_persistent_state_from_txt_file,
 )
+from tasks.util.stats import parse_log, average_metrics
+from tasks.util.plot import plot_stats
 
 # Static
 CUTTING_LINE = "-------------------------------------------------------------------------------"
@@ -38,7 +37,16 @@ INPUT_MAP = {"msg_id": 0, "json": 1}
 
 
 @task
-def run(ctx, scale, batchsize, concurrency, inputbatch, input_rate, duration):
+def run(
+    ctx,
+    scale,
+    batchsize,
+    concurrency,
+    inputbatch,
+    input_rate,
+    duration,
+    num_hosts,
+):
     """
     Test the 'an' function with resource contention.
     Input rate unit: data/ second
@@ -153,16 +161,17 @@ def run(ctx, scale, batchsize, concurrency, inputbatch, input_rate, duration):
         input_rate=input_rate,
         duration=duration,
         persistent_state=persistent_state,
+        num_hosts_scheduled_in=num_hosts,
     )
 
 
 @task
-def test(ctx, scale=2):
+def test(ctx, scale=10):
     global DURATION, INPUT_BATCHSIZE
     global RESULT_FILE
 
-    DURATION = 60
-    RESULT_FILE = "tasks/stream/logs/etl_temp_test.txt"
+    DURATION = 100
+    RESULT_FILE = "tasks/stream/logs/etl_test_new.txt"
 
     write_string_to_log(RESULT_FILE, CUTTING_LINE)
     INPUT_BATCHSIZE = 5000
@@ -171,7 +180,8 @@ def test(ctx, scale=2):
 
     # rates = [2500, 5000, 7500, 10000]
     rates = [50000]
-    schedule_modes = [0, 1, 2]
+    schedule_modes = [0]
+    num_hosts_scheduled_arr = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 
     for schedule_mode in schedule_modes:
         reset_stream_parameter("schedule_mode", schedule_mode)
@@ -191,3 +201,61 @@ def test(ctx, scale=2):
                 duration=DURATION,
             )
             print(f"Completed test_contention with con: {concurrency}")
+
+
+@task
+def testhosts(ctx, scale=10):
+    global DURATION, INPUT_BATCHSIZE
+    global RESULT_FILE
+
+    DURATION = 100
+    RESULT_FILE = "tasks/stream/logs/etl_test_hosts.txt"
+
+    write_string_to_log(RESULT_FILE, CUTTING_LINE)
+    INPUT_BATCHSIZE = 500
+    concurrency = 5
+    batchsize = 20
+
+    # rates = [2500, 5000, 7500, 10000]
+    rates = [5000]
+    schedule_mode = 0
+    num_hosts_scheduled_arr = [2, 4, 6, 8, 10]
+    reset_stream_parameter("schedule_mode", schedule_mode)
+
+    for num_hosts in num_hosts_scheduled_arr:
+        for rate in rates:
+            timestamp = datetime.now().strftime("%d--%b--%Y %H:%M:%S")
+            start_message = f"{timestamp} Running with rate={rate}, batchsize={batchsize}, concurrency={concurrency}, inputbatch={INPUT_BATCHSIZE}, scale={scale}, duration={DURATION}, schedulemode={schedule_mode}, num_hosts = {num_hosts}"
+            write_string_to_log(RESULT_FILE, start_message)
+            # Call the test_contention task with the current batchsize
+            run(
+                ctx,
+                scale=scale,
+                batchsize=batchsize,
+                concurrency=concurrency,
+                inputbatch=INPUT_BATCHSIZE,
+                input_rate=rate,
+                duration=DURATION,
+                num_hosts=num_hosts,
+            )
+            print(f"Completed test_contention with con: {concurrency}")
+
+
+@task
+def stats(ctx):
+    RESULT_FILE = "tasks/stream/logs/etl_temp_test.txt"
+    df = parse_log(RESULT_FILE)
+
+    average_metrics(df)
+
+    plot_stats("etl", df)
+
+
+@task
+def stats(ctx):
+    RESULT_FILE = "tasks/stream/logs/etl_temp_test.txt"
+    df = parse_log(RESULT_FILE)
+
+    average_metrics(df)
+
+    plot_stats("etl", df)

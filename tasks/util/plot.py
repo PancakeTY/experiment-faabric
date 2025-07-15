@@ -181,41 +181,47 @@ def save_plot(fig, plot_dir, plot_name):
         )
     )
 
+
 def shorten_number(x, pos):
     if x == "inf":
         return x
     if x >= 1000:
-        return f'{x/1000:.0f}k'
-    return f'{x:.0f}'
+        return f"{x/1000:.0f}k"
+    return f"{x:.0f}"
 
-def varied_para_plot_util(df, application, workers = 3, function_duration = None):
+
+def varied_para_plot_util(df, application, workers=3, function_duration=None):
     """
     Plot the 'varied parallelism' experiment with bar figure
     """
 
     sns.set(style="ticks")
 
-    custom_colors =['#c6e9b4', '#40b5c4', '#225da8']  # Example colors for scales 1, 2, 3
+    custom_colors = [
+        "#c6e9b4",
+        "#40b5c4",
+        "#225da8",
+    ]  # Example colors for scales 1, 2, 3
 
     # Histogram 1: Distribution of Input Rate
     plt.figure(figsize=(10, 6))
     ax = plt.gca()
 
     sns.barplot(
-    data=df,
-    x="Input Rate",
-    y="99th Percentile Actual Time (ms)",
-    hue="Scale",
-    errorbar="ci",  # or "ci" for confidence intervals
-    capsize=0.3,    # Controls the "T" cap size
-    err_kws={"color": "black", "linewidth": 1.5},  # Updated approach
-    palette=custom_colors,
+        data=df,
+        x="Input Rate",
+        y="99th Percentile Actual Time (ms)",
+        hue="Scale",
+        errorbar="ci",  # or "ci" for confidence intervals
+        capsize=0.3,  # Controls the "T" cap size
+        err_kws={"color": "black", "linewidth": 1.5},  # Updated approach
+        palette=custom_colors,
     )
-    if (application == "wc"):
-        plt.ylabel('End-to-end Latency (ms)', fontsize=14)
+    if application == "wc":
+        plt.ylabel("End-to-end Latency (ms)", fontsize=14)
     else:
-        plt.ylabel('', fontsize=14)
-    plt.xlabel('', fontsize=14)
+        plt.ylabel("", fontsize=14)
+    plt.xlabel("", fontsize=14)
     plt.xticks(fontsize=12)
     plt.yticks(fontsize=12)
 
@@ -226,8 +232,12 @@ def varied_para_plot_util(df, application, workers = 3, function_duration = None
         plt.savefig(f"tasks/stream/figure/{application}_para_latency.png")
         plt.savefig(f"tasks/stream/pdf/{application}_para_latency.pdf")
     else:
-        plt.savefig(f"tasks/stream/figure/{application}_para_latency_{workers}-worker.png")       
-        plt.savefig(f"tasks/stream/pdf/{application}_para_latency_{workers}-worker.pdf")
+        plt.savefig(
+            f"tasks/stream/figure/{application}_para_latency_{workers}-worker.png"
+        )
+        plt.savefig(
+            f"tasks/stream/pdf/{application}_para_latency_{workers}-worker.pdf"
+        )
     plt.close()
 
     # Histogram 3: Distribution of Throughput
@@ -235,20 +245,20 @@ def varied_para_plot_util(df, application, workers = 3, function_duration = None
     ax = plt.gca()
 
     sns.barplot(
-    data=df,
-    x="Input Rate",
-    y="Throughput (msg/sec)",
-    hue="Scale",
-    errorbar="ci",  # or "ci" for confidence intervals
-    capsize=0.3,    # Controls the "T" cap size
-    err_kws={"color": "black", "linewidth": 1.5},  # Updated approach
-    palette=custom_colors
+        data=df,
+        x="Input Rate",
+        y="Throughput (msg/sec)",
+        hue="Scale",
+        errorbar="ci",  # or "ci" for confidence intervals
+        capsize=0.3,  # Controls the "T" cap size
+        err_kws={"color": "black", "linewidth": 1.5},  # Updated approach
+        palette=custom_colors,
     )
-    if (application == "wc"):
-        plt.ylabel('Throughput (tuple/s)', fontsize=14)
+    if application == "wc":
+        plt.ylabel("Throughput (tuple/s)", fontsize=14)
     else:
-        plt.ylabel('', fontsize=14)
-    plt.xlabel('', fontsize=14)
+        plt.ylabel("", fontsize=14)
+    plt.xlabel("", fontsize=14)
     plt.xticks(fontsize=12)
     plt.yticks(fontsize=12)
 
@@ -259,18 +269,26 @@ def varied_para_plot_util(df, application, workers = 3, function_duration = None
         plt.savefig(f"tasks/stream/figure/{application}_para_throughput.png")
         plt.savefig(f"tasks/stream/pdf/{application}_para_throughput.pdf")
     else:
-        plt.savefig(f"tasks/stream/figure/{application}_para_throughput_{workers}-worker.png")       
-        plt.savefig(f"tasks/stream/pdf/{application}_para_throughput_{workers}-worker.pdf")       
+        plt.savefig(
+            f"tasks/stream/figure/{application}_para_throughput_{workers}-worker.png"
+        )
+        plt.savefig(
+            f"tasks/stream/pdf/{application}_para_throughput_{workers}-worker.pdf"
+        )
     plt.close()
 
     if function_duration is None:
         return
-    
+
     # Plot the duration of function_duration
     df_filter = pd.DataFrame()
-    df_filter['Input Rate'] = df['Input Rate']
-    df_filter['Scale'] = df['Scale'].astype(int)
-    df_filter['Average Tuple Duration (µs)'] = df['Functions'].apply(lambda x: extract_avg_tuple_duration(x, function_name=function_duration))
+    df_filter["Input Rate"] = df["Input Rate"]
+    df_filter["Scale"] = df["Scale"].astype(int)
+    df_filter["Average Tuple Duration (µs)"] = df["Functions"].apply(
+        lambda x: extract_avg_tuple_duration(
+            x, function_name=function_duration
+        )
+    )
     plt.figure(figsize=(10, 6))
     ax = plt.gca()
 
@@ -280,15 +298,15 @@ def varied_para_plot_util(df, application, workers = 3, function_duration = None
         y="Average Tuple Duration (µs)",
         hue="Scale",
         errorbar="ci",  # or "ci" for confidence intervals
-        capsize=0.3,    # Controls the "T" cap size
+        capsize=0.3,  # Controls the "T" cap size
         err_kws={"color": "black", "linewidth": 1.5},  # Updated approach
         palette=custom_colors,
     )
-    if (application == "wc"):
-        plt.ylabel('Average Tuple Processing Latency (µs)', fontsize=14)
+    if application == "wc":
+        plt.ylabel("Average Tuple Processing Latency (µs)", fontsize=14)
     else:
-        plt.ylabel('', fontsize=14)
-    plt.xlabel('', fontsize=14)
+        plt.ylabel("", fontsize=14)
+    plt.xlabel("", fontsize=14)
     plt.xticks(fontsize=12)
     plt.yticks(fontsize=12)
 
@@ -297,8 +315,12 @@ def varied_para_plot_util(df, application, workers = 3, function_duration = None
         plt.savefig(f"tasks/stream/figure/{application}_para_duration.png")
         plt.savefig(f"tasks/stream/pdf/{application}_para_duration.pdf")
     else:
-        plt.savefig(f"tasks/stream/figure/{application}_para_duration_{workers}-worker.png")
-        plt.savefig(f"tasks/stream/pdf/{application}_para_duration_{workers}-worker.pdf")
+        plt.savefig(
+            f"tasks/stream/figure/{application}_para_duration_{workers}-worker.png"
+        )
+        plt.savefig(
+            f"tasks/stream/pdf/{application}_para_duration_{workers}-worker.pdf"
+        )
     plt.close()
 
     # df_grouped = df.groupby(['Input Rate', 'Scale'])['Throughput (msg/sec)'].mean().reset_index()
@@ -308,12 +330,21 @@ def varied_para_plot_util(df, application, workers = 3, function_duration = None
     # for index, row in df_grouped.iterrows():
     #     print(f"Input Rate: {row['Input Rate']}, Scale: {row['Scale']}, Average Throughput: {row['Throughput (msg/sec)']} msg/sec")
 
-    df_grouped = df.groupby(['Input Rate', 'Scale'])['99th Percentile Actual Time (ms)'].mean().reset_index()
+    df_grouped = (
+        df.groupby(["Input Rate", "Scale"])["99th Percentile Actual Time (ms)"]
+        .mean()
+        .reset_index()
+    )
 
     # Print the average latency for each combination of Input Rate and Scale
-    print("Average 99th Percentile Latency (ms) for each combination of Input Rate and Scale:")
+    print(
+        "Average 99th Percentile Latency (ms) for each combination of Input Rate and Scale:"
+    )
     for index, row in df_grouped.iterrows():
-        print(f"Input Rate: {row['Input Rate']}, Scale: {row['Scale']}, Average Latency: {row['99th Percentile Actual Time (ms)']} ms")
+        print(
+            f"Input Rate: {row['Input Rate']}, Scale: {row['Scale']}, Average Latency: {row['99th Percentile Actual Time (ms)']} ms"
+        )
+
 
 def varied_batch_plot_util(df, application):
     """
@@ -332,19 +363,21 @@ def varied_batch_plot_util(df, application):
         y="99th Percentile Actual Time (ms)",
         hue="Batch Size",
         errorbar="ci",  # or "ci" for confidence intervals
-        capsize=0.3,    # Controls the "T" cap size
+        capsize=0.3,  # Controls the "T" cap size
         err_kws={"color": "black", "linewidth": 1.5},  # Updated approach
-        palette=sns.color_palette("YlGnBu", n_colors=df['Batch Size'].nunique()),
-        ax=ax
+        palette=sns.color_palette(
+            "YlGnBu", n_colors=df["Batch Size"].nunique()
+        ),
+        ax=ax,
     )
     ax.yaxis.grid(False)
-    
-    plt.yscale('log')
-    if (application == "wc"):
-        plt.ylabel('End-to-end Latency (ms)', fontsize=14)
+
+    plt.yscale("log")
+    if application == "wc":
+        plt.ylabel("End-to-end Latency (ms)", fontsize=14)
     else:
-        plt.ylabel('', fontsize=14)
-    plt.xlabel('', fontsize=14)
+        plt.ylabel("", fontsize=14)
+    plt.xlabel("", fontsize=14)
     # Set x-axis tick labels to be concise (e.g., 20000 -> 20k)
     # ax.xaxis.set_major_formatter(mticker.FuncFormatter(shorten_number))
     plt.xticks(fontsize=12)
@@ -366,16 +399,18 @@ def varied_batch_plot_util(df, application):
         errorbar="ci",
         capsize=0.3,
         err_kws={"color": "black", "linewidth": 1.5},  # Updated approach
-        palette=sns.color_palette("YlGnBu", n_colors=df['Batch Size'].nunique()),
-        ax=ax
+        palette=sns.color_palette(
+            "YlGnBu", n_colors=df["Batch Size"].nunique()
+        ),
+        ax=ax,
     )
     ax.yaxis.grid(False)
 
-    if (application == "wc"):
-        plt.ylabel('Throughput (msg/sec)', fontsize=14)
+    if application == "wc":
+        plt.ylabel("Throughput (msg/sec)", fontsize=14)
     else:
-        plt.ylabel('', fontsize=14)
-    plt.xlabel('', fontsize=14)
+        plt.ylabel("", fontsize=14)
+    plt.xlabel("", fontsize=14)
     plt.xticks(fontsize=12)
     plt.yticks(fontsize=12)
     ax.yaxis.set_major_formatter(mticker.FuncFormatter(shorten_number))
@@ -383,6 +418,7 @@ def varied_batch_plot_util(df, application):
     plt.savefig(f"tasks/stream/figure/{application}_batch_throughput.png")
     plt.savefig(f"tasks/stream/pdf/{application}_batch_throughput.pdf")
     plt.close()
+
 
 def varied_con_plot_util(df, application):
     import matplotlib.ticker as mticker
@@ -397,18 +433,21 @@ def varied_con_plot_util(df, application):
         y="Average Tuple Duration (µs)",
         marker="o",
         errorbar=None,
-        ax=ax
+        ax=ax,
     )
     ax.yaxis.grid(False)
     ax.xaxis.grid(False)
     # plt.xlabel('Concurrency', fontsize=14)
-    if application == 'wc':
-        plt.ylabel('Average Tuple Processing Latency (µs)', fontsize=14)
+    if application == "wc":
+        plt.ylabel("Average Tuple Processing Latency (µs)", fontsize=14)
     else:
-        plt.ylabel('')       
-    plt.xlabel('')       
+        plt.ylabel("")
+    plt.xlabel("")
 
-    plt.xticks(ticks=range(df['Concurrency'].min(), df['Concurrency'].max() + 1), fontsize=12)
+    plt.xticks(
+        ticks=range(df["Concurrency"].min(), df["Concurrency"].max() + 1),
+        fontsize=12,
+    )
     plt.yticks(fontsize=12)
 
     plt.tight_layout()
@@ -416,10 +455,14 @@ def varied_con_plot_util(df, application):
     plt.savefig(f"tasks/stream/pdf/{application}_con_duration.pdf")
     plt.close()
 
-    df_avg = df.groupby('Concurrency', as_index=False)['Average Tuple Duration (µs)'].mean()
+    df_avg = df.groupby("Concurrency", as_index=False)[
+        "Average Tuple Duration (µs)"
+    ].mean()
     print("Average Tuple Duration (µs) for each Concurrency level:")
     for index, row in df_avg.iterrows():
-        print(f"Concurrency: {row['Concurrency']}, Average Latency: {row['Average Tuple Duration (µs)']:.2f} µs")
+        print(
+            f"Concurrency: {row['Concurrency']}, Average Latency: {row['Average Tuple Duration (µs)']:.2f} µs"
+        )
 
 
 def overall_plot_util(df, application):
@@ -438,9 +481,9 @@ def overall_plot_util(df, application):
         # ax=ax
     )
 
-    plt.yscale('log')
-    plt.xlabel('Input Rate (tuples/s)', fontsize=12)
-    plt.ylabel('End-to-end Latency (ms)', fontsize=12)
+    plt.yscale("log")
+    plt.xlabel("Input Rate (tuples/s)", fontsize=12)
+    plt.ylabel("End-to-end Latency (ms)", fontsize=12)
     # ax.xaxis.set_major_formatter(mticker.FuncFormatter(shorten_number))
     plt.xticks(fontsize=11)
     plt.yticks(fontsize=11)
@@ -459,11 +502,11 @@ def overall_plot_util(df, application):
         errorbar="sd",
         capsize=0.2,
         err_kws={"color": "black", "linewidth": 1.5},
-        ax=ax
+        ax=ax,
     )
 
-    plt.xlabel('Input Rate (tuples/s)', fontsize=12)
-    plt.ylabel('Throughput (tuples/s)', fontsize=12)
+    plt.xlabel("Input Rate (tuples/s)", fontsize=12)
+    plt.ylabel("Throughput (tuples/s)", fontsize=12)
     ax.xaxis.set_major_formatter(mticker.FuncFormatter(shorten_number))
     plt.xticks(fontsize=11)
     plt.yticks(fontsize=11)
@@ -471,3 +514,69 @@ def overall_plot_util(df, application):
     plt.tight_layout()
     plt.savefig(f"tasks/stream/figure/{application}_overall_throughput.png")
     plt.close()
+
+
+def plot_stats(application, df):
+    # Since the experiment was run twice for each mode, we'll average the results
+    # to get a clean plot.
+    df_avg = df.groupby("schedulemode").mean().reset_index()
+
+    # 2. Set up the plot style
+    sns.set_theme(style="whitegrid")
+
+    # 3. Create a figure with two subplots, one above the other.
+    fig, axes = plt.subplots(2, 1, figsize=(10, 12))
+    fig.suptitle(
+        f"Performance Comparison for {application} application", fontsize=16
+    )
+
+    # --- Plot 1: Throughput Comparison ---
+    sns.barplot(
+        ax=axes[0],
+        x="schedulemode",
+        y="throughput",
+        data=df_avg,
+        palette="viridis",
+    )
+    axes[0].set_title("Throughput Comparison", fontsize=14)
+    axes[0].set_xlabel("Schedule Mode", fontsize=12)
+    axes[0].set_ylabel("Throughput (events/sec)", fontsize=12)
+    # Add text labels on top of each bar
+    for index, row in df_avg.iterrows():
+        axes[0].text(
+            row.name,
+            row.throughput,
+            f"{row.throughput:.0f}",
+            color="black",
+            ha="center",
+            va="bottom",
+        )
+
+    # --- Plot 2: Latency Comparison ---
+
+    # To create a grouped bar plot, we first need to "melt" the DataFrame.
+    # This converts the latency columns into a single "variable" column.
+    df_latencies = df_avg.melt(
+        id_vars=["schedulemode"],
+        value_vars=["p99Latency", "p95Latency", "medianLatency"],
+        var_name="LatencyType",
+        value_name="Latency (ms)",
+    )
+
+    # Create the grouped bar plot for latencies
+    sns.barplot(
+        ax=axes[1],
+        x="schedulemode",
+        y="Latency (ms)",
+        hue="LatencyType",
+        data=df_latencies,
+        palette="plasma",
+    )
+    axes[1].set_title("Latency Comparison (p99, p95, Median)", fontsize=14)
+    axes[1].set_xlabel("Schedule Mode", fontsize=12)
+    axes[1].set_ylabel("Latency (ms)", fontsize=12)
+    axes[1].legend(title="Latency Type")
+
+    # 4. Final adjustments and display the plot
+    plt.tight_layout(rect=[0, 0.03, 1, 0.96])
+    plt.savefig(f"tasks/stream/figure/stats_{application}.png")

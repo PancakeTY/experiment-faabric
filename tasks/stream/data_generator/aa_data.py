@@ -1,22 +1,30 @@
 import random
-import time
+import math
 import json
 
-OUTPUT_PATH = "/pvol/runtime/experiment-faabric/tasks/stream/data/aa_dataset.txt"
+OUTPUT_PATH = (
+    "/pvol/runtime/experiment-faabric/tasks/stream/data/aa_dataset.txt"
+)
+
+TOTAL_RECORDS = 2000000
+
 
 def generate_campaign_ad_mapping(num_campaigns, ads_per_campaign):
     campaign_ids = list(range(num_campaigns))
     ad_ids = list(range(num_campaigns * ads_per_campaign))
-    
+
     # build mapping: campaign_id -> list of ads_per_campaign ad IDs
     return {
         cid: ad_ids[cid * ads_per_campaign : (cid + 1) * ads_per_campaign]
         for cid in campaign_ids
     }
 
+
 def get_persistent_state(num_campaigns=100, ads_per_campaign=10):
     # use a consistent name here
-    campaign_ad_map = generate_campaign_ad_mapping(num_campaigns, ads_per_campaign)
+    campaign_ad_map = generate_campaign_ad_mapping(
+        num_campaigns, ads_per_campaign
+    )
 
     # invert to ad_id -> campaign_id
     ad_campaign_map = {
@@ -24,10 +32,13 @@ def get_persistent_state(num_campaigns=100, ads_per_campaign=10):
         for campaign_id, ads in campaign_ad_map.items()
         for ad_id in ads
     }
-    
-    return { str(ad_id): str(campaign_id)
-             for ad_id, campaign_id in ad_campaign_map.items() }
-    
+
+    return {
+        str(ad_id): str(campaign_id)
+        for ad_id, campaign_id in ad_campaign_map.items()
+    }
+
+
 # -----------------------------------------------------------------------------
 # generate_dataset
 #
@@ -52,11 +63,14 @@ def get_persistent_state(num_campaigns=100, ads_per_campaign=10):
 
 MAX_INT32 = 2**31 - 1  # 2147483647
 
-def generate_dataset(num_campaigns=100,
-                     ads_per_campaign=10,
-                     num_intervals=100,
-                     interval_ms=10000,
-                     records_per_interval=10000):
+
+def generate_dataset(
+    total_records,
+    num_campaigns=100,
+    ads_per_campaign=10,
+    interval_ms=10000,
+    records_per_interval=10000,
+):
     """
     Generate a dataset with columns: ad, campaign, event_time.
     - ad: random integer [0, num_campaigns*ads_per_campaign-1]
@@ -67,12 +81,19 @@ def generate_dataset(num_campaigns=100,
     ad_campaign_map = get_persistent_state(num_campaigns, ads_per_campaign)
     start_time_ms = 0
 
+    # ✨ Calculate the number of intervals needed based on total_records
+    if records_per_interval <= 0:
+        raise ValueError("records_per_interval must be positive.")
+    num_intervals = math.ceil(total_records / records_per_interval)
+
     max_intervals = (MAX_INT32 + 1) // interval_ms
     if num_intervals > max_intervals:
-        print(f"Clamping num_intervals from {num_intervals} to {max_intervals}")
+        print(
+            f"Clamping num_intervals from {num_intervals} to {max_intervals}"
+        )
         num_intervals = max_intervals
 
-    with open(OUTPUT_PATH, 'w') as f:
+    with open(OUTPUT_PATH, "w") as f:
         for window_idx in range(num_intervals):
             window_start = start_time_ms + window_idx * interval_ms
 
@@ -80,7 +101,7 @@ def generate_dataset(num_campaigns=100,
             bucket = [
                 (
                     window_start + random.randint(0, interval_ms - 1),
-                    random.randint(0, num_campaigns * ads_per_campaign - 1)
+                    random.randint(0, num_campaigns * ads_per_campaign - 1),
                 )
                 for _ in range(records_per_interval)
             ]
@@ -95,10 +116,11 @@ def generate_dataset(num_campaigns=100,
                 event_type = "view" if random.random() < 0.9 else "other"
                 f.write(f"{ad} {campaign} {event_time} {event_type}\n")
 
+
 # Quick sanity check:
 if __name__ == "__main__":
     num_campaigns = 100
     ads_per_campaign = 10
     print("Generating Adevertisement Analytic Dataset")
     # state = get_persistent_state(num_campaigns, ads_per_campaign)
-    generate_dataset()
+    generate_dataset(total_records=TOTAL_RECORDS)

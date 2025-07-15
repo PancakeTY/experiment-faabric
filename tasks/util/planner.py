@@ -313,6 +313,7 @@ def run_application_with_input(
     input_rate: float,
     duration: float,
     persistent_state=None,
+    num_hosts_scheduled_in=0,
 ):
     write_string_to_log(
         result_file,
@@ -324,8 +325,8 @@ def run_application_with_input(
     pregenerated_work = []
     num_batches = math.floor(len(records) / inputbatch)
 
-    for i in range(1, num_batches + 1):
-        start_idx = (i - 1) * inputbatch
+    for i in range(num_batches):
+        start_idx = i * inputbatch
 
         input_data_list = generate_input_data(
             records, start_idx, inputbatch, input_map
@@ -353,7 +354,8 @@ def run_application_with_input(
     flush_all()
 
     format_nodes(nodes)
-
+    if num_hosts_scheduled_in > 0:
+        reset_stream_parameter("num_hosts_scheduled", num_hosts_scheduled_in)
     register_application(application_name, nodes)
 
     if persistent_state is not None:
@@ -361,7 +363,7 @@ def run_application_with_input(
 
     # Reset the parameters
     reset_stream_parameter("is_outputting", 0)
-    reset_stream_parameter("max_inflight_reqs", 50000)
+    reset_stream_parameter("max_inflight_reqs", input_rate)
     reset_stream_parameter("max_executors", 80)
     reset_stream_parameter("max_replicas", concurrency)
     if batchsize > 0:
@@ -372,7 +374,7 @@ def run_application_with_input(
     input_threads = []
 
     # Launch multiple threads
-    batch_queue = Queue(maxsize=num_input_threads * 2)  # Bounded queue
+    batch_queue = Queue()  # Bounded queue
     token_queue = Queue()
 
     # Setup the start and end time for the application running
@@ -384,7 +386,9 @@ def run_application_with_input(
     num_producer_threads = 1
 
     # Start the ThreadPoolExecutor
-    with ThreadPoolExecutor() as executor:
+    with ThreadPoolExecutor(
+        max_workers=num_input_threads + num_producer_threads + 1
+    ) as executor:
 
         executor.submit(
             token_producer,
