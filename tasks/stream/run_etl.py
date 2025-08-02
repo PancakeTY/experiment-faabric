@@ -45,7 +45,7 @@ def run(
     inputbatch,
     input_rate,
     duration,
-    num_hosts,
+    num_hosts=0,
 ):
     """
     Test the 'an' function with resource contention.
@@ -174,14 +174,13 @@ def test(ctx, scale=10):
     RESULT_FILE = "tasks/stream/logs/etl_test_new.txt"
 
     write_string_to_log(RESULT_FILE, CUTTING_LINE)
-    INPUT_BATCHSIZE = 5000
+    INPUT_BATCHSIZE = 500
     concurrency = 5
     batchsize = 20
 
     # rates = [2500, 5000, 7500, 10000]
-    rates = [50000]
-    schedule_modes = [0]
-    num_hosts_scheduled_arr = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    rates = [5000]
+    schedule_modes = [0, 0, 1, 2, 3, 0, 0, 1, 2, 3, 0, 1, 2, 3]
 
     for schedule_mode in schedule_modes:
         reset_stream_parameter("schedule_mode", schedule_mode)

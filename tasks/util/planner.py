@@ -8,6 +8,7 @@ from math import ceil
 from time import sleep
 from collections import defaultdict
 
+from faasmctl.util.invoke import invoke_by_consumer
 from tasks.util.thread import (
     AtomicInteger,
     token_producer,
@@ -24,6 +25,7 @@ from faasmctl.util.planner import (
     get_available_hosts as planner_get_available_hosts,
     get_in_fligh_apps as planner_get_in_fligh_apps,
     set_persistent_state,
+    custom_request,
 )
 from tasks.util.faasm import generate_input_data
 from faasmctl.util.batch import get_msg_from_input_data
@@ -312,6 +314,7 @@ def run_application_with_input(
     inputbatch: int,
     input_rate: float,
     duration: float,
+    schedule_mode: int,
     persistent_state=None,
     num_hosts_scheduled_in=0,
 ):
@@ -323,6 +326,9 @@ def run_application_with_input(
 
     print("Pre-generating all JSON payloads...")
     pregenerated_work = []
+    if len(records) < 10000:
+        print("Not enough records to pre-generate payloads. Exiting.")
+        return
     num_batches = math.floor(len(records) / inputbatch)
 
     for i in range(num_batches):
@@ -336,7 +342,7 @@ def run_application_with_input(
         ]
         app_id = start_idx + 1
 
-        # ✨ 2. Create the final payload
+        # 2. Create the final payload
         msg_json = get_msg_from_input_data(
             app_id,
             input_msg,
@@ -345,7 +351,7 @@ def run_application_with_input(
             chained_id_list,
         )
 
-        # ✨ 3. Store the (app_id, json_payload) tuple
+        # 3. Store the (app_id, json_payload) tuple
         pregenerated_work.append((app_id, msg_json))
 
     print(f"Pre-generation complete: {len(pregenerated_work)} payloads.")
@@ -353,9 +359,10 @@ def run_application_with_input(
     # Flush the scheduler and workers
     flush_all()
 
+    reset_stream_parameter("schedule_mode", schedule_mode)
     format_nodes(nodes)
-    if num_hosts_scheduled_in > 0:
-        reset_stream_parameter("num_hosts_scheduled", num_hosts_scheduled_in)
+    # if num_hosts_scheduled_in > 0:
+    #     reset_stream_parameter("num_hosts_scheduled", num_hosts_scheduled_in)
     register_application(application_name, nodes)
 
     if persistent_state is not None:
@@ -368,6 +375,23 @@ def run_application_with_input(
     reset_stream_parameter("max_replicas", concurrency)
     if batchsize > 0:
         reset_batch_size(batchsize)
+
+    # If schedule mode is 0 or 3 (Our designed scheduler or FaaSFlow scheduler)
+    if schedule_mode == 0 or schedule_mode == 3:
+        print("Pre-invoking the application...")
+        pre_num_batches = int(10000 / inputbatch)
+        for i in range(pre_num_batches):
+            msg_json = pregenerated_work[i][1]
+            invoke_by_consumer(
+                msg_json,
+                num_retries=1000,
+                sleep_period_secs=0.1,
+                end_time=time.time() + 10,
+            )
+        print("Pre-invocation complete, rescheduling...")
+        time.sleep(5)
+        custom_request(key="reschedule", value="1")
+        print("Rescheduling complete.")
 
     # Initialize variables for running application
     atomic_counter = AtomicInteger(1)

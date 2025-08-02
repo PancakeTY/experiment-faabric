@@ -28,7 +28,16 @@ INPUT_MAP = {"sensor_id": 3, "temperature": 4}
 
 
 @task
-def run(ctx, scale, batchsize, concurrency, inputbatch, input_rate, duration):
+def run(
+    ctx,
+    scale,
+    batchsize,
+    concurrency,
+    inputbatch,
+    input_rate,
+    duration,
+    schedule_mode,
+):
     """
     Test the 'an' function with resource contention.
     Input rate unit: data/ second
@@ -71,6 +80,7 @@ def run(ctx, scale, batchsize, concurrency, inputbatch, input_rate, duration):
         inputbatch=inputbatch,
         input_rate=input_rate,
         duration=duration,
+        schedule_mode=schedule_mode,
     )
 
 
@@ -83,16 +93,15 @@ def test(ctx, scale=2):
     RESULT_FILE = "tasks/stream/logs/sd_temp_test.txt"
 
     write_string_to_log(RESULT_FILE, CUTTING_LINE)
-    INPUT_BATCHSIZE = 10000
+    INPUT_BATCHSIZE = 2500
     concurrency = 5
     batchsize = 20
 
-    # rates = [2500, 5000, 7500, 10000]
-    rates = [100000]
-    schedule_modes = [0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2]
+    rates = [25000]
+    # schedule_modes = [0, 1, 2, 3]
+    schedule_modes = [4]
 
     for schedule_mode in schedule_modes:
-        reset_stream_parameter("schedule_mode", schedule_mode)
 
         for rate in rates:
             timestamp = datetime.now().strftime("%d--%b--%Y %H:%M:%S")
@@ -107,6 +116,7 @@ def test(ctx, scale=2):
                 inputbatch=INPUT_BATCHSIZE,
                 input_rate=rate,
                 duration=DURATION,
+                schedule_mode=schedule_mode,
             )
             print(f"Completed test_contention with con: {concurrency}")
 

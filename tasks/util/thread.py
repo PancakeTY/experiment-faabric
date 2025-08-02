@@ -98,7 +98,7 @@ def batch_consumer(batch_queue, end_time):
 
         app_id, msg_json = work_item
 
-        print(f"Processing app_id: {app_id} ")
+        # print(f"Processing app_id: {app_id} ")
         invoke_by_consumer(
             msg_json,
             num_retries=1000,
