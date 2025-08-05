@@ -317,6 +317,7 @@ def run_application_with_input(
     schedule_mode: int,
     persistent_state=None,
     num_hosts_scheduled_in=0,
+    reschedule=True,
 ):
     write_string_to_log(
         result_file,
@@ -377,7 +378,7 @@ def run_application_with_input(
         reset_batch_size(batchsize)
 
     # If schedule mode is 0 or 3 (Our designed scheduler or FaaSFlow scheduler)
-    if schedule_mode == 0 or schedule_mode == 3:
+    if reschedule and (schedule_mode == 0 or schedule_mode == 3):
         print("Pre-invoking the application...")
         pre_num_batches = int(10000 / inputbatch)
         for i in range(pre_num_batches):

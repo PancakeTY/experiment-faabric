@@ -6,6 +6,7 @@ from . import run_etl
 from . import run_wc
 from . import run_mo
 from . import run_sd
+from . import run_state
 from . import run_wcnew
 from . import faasm_mo
 from . import faasm_sd
@@ -19,9 +20,10 @@ ns = Collection(
     run_wc,
     run_mo,
     run_sd,
+    run_state,
     run_wcnew,
     faasm_mo,
     faasm_sd,
     faasm_wc,
     custom_plot,
-    )
+)
