@@ -1,7 +1,6 @@
 import time
 import threading
 import json
-import math
 from queue import Queue
 from concurrent.futures import ThreadPoolExecutor
 from math import ceil
@@ -27,8 +26,6 @@ from faasmctl.util.planner import (
     set_persistent_state,
     custom_request,
 )
-from tasks.util.faasm import generate_input_data
-from faasmctl.util.batch import get_msg_from_input_data
 
 
 # This method also returns the number of used VMs
@@ -303,10 +300,8 @@ def format_nodes(nodes):
 def run_application_with_input(
     application_name: str,
     nodes,
-    records,
+    pregenerated_work,
     result_file: str,
-    input_map: dict,
-    input_msg: str,
     num_input_threads: int,
     scale: int,
     batchsize: int,
@@ -325,38 +320,6 @@ def run_application_with_input(
         f"Concurrency:{concurrency}, InputBatch:{inputbatch}, Scale:{scale}\n",
     )
 
-    print("Pre-generating all JSON payloads...")
-    pregenerated_work = []
-    if len(records) < 10000:
-        print("Not enough records to pre-generate payloads. Exiting.")
-        return
-    num_batches = math.floor(len(records) / inputbatch)
-
-    for i in range(num_batches):
-        start_idx = i * inputbatch
-
-        input_data_list = generate_input_data(
-            records, start_idx, inputbatch, input_map
-        )
-        chained_id_list = [
-            j for j in range(start_idx + 1, start_idx + inputbatch + 1)
-        ]
-        app_id = start_idx + 1
-
-        # 2. Create the final payload
-        msg_json = get_msg_from_input_data(
-            app_id,
-            input_msg,
-            inputbatch,
-            input_data_list,
-            chained_id_list,
-        )
-
-        # 3. Store the (app_id, json_payload) tuple
-        pregenerated_work.append((app_id, msg_json))
-
-    print(f"Pre-generation complete: {len(pregenerated_work)} payloads.")
-
     # Flush the scheduler and workers
     flush_all()
 
@@ -372,8 +335,8 @@ def run_application_with_input(
     # Reset the parameters
     reset_stream_parameter("is_outputting", 0)
     reset_stream_parameter("max_inflight_reqs", input_rate)
-    reset_stream_parameter("max_executors", 80)
-    reset_stream_parameter("max_replicas", concurrency)
+    reset_stream_parameter("max_executors", 40)
+    # reset_stream_parameter("max_replicas", concurrency)
     if batchsize > 0:
         reset_batch_size(batchsize)
 
