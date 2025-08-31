@@ -249,6 +249,8 @@ def disp(ctx, scale=3):
 
     reset_stream_parameter("dispatch_period", 0)
     reset_stream_parameter("batch_check_period", 0)
+    reset_stream_parameter("runtime_reconfig", 0)
+
     # Prepare the input data
     raw_records = read_data_from_txt_file_noparse(INPUT_FILE)
     records = [enwrap_json(record) for record in raw_records]
