@@ -334,9 +334,7 @@ def run_application_with_input(
 
     # Reset the parameters
     reset_stream_parameter("is_outputting", 0)
-    reset_stream_parameter("max_inflight_reqs", input_rate)
     reset_stream_parameter("max_executors", 40)
-    # reset_stream_parameter("max_replicas", concurrency)
     if batchsize > 0:
         reset_batch_size(batchsize)
 
@@ -344,6 +342,8 @@ def run_application_with_input(
     if reschedule and schedule_mode in (0, 3, 5):
         print("Pre-invoking the application...")
         pre_num_batches = int(10000 / inputbatch)
+        if inputbatch == 1:
+            pre_num_batches = int(1000 / inputbatch)
         for i in range(pre_num_batches):
             msg_json = pregenerated_work[i][1]
             invoke_by_consumer(
@@ -356,6 +356,8 @@ def run_application_with_input(
         time.sleep(5)
         custom_request(key="reschedule", value="1")
         print("Rescheduling complete.")
+
+    reset_stream_parameter("max_inflight_reqs", input_rate)
 
     # Initialize variables for running application
     atomic_counter = AtomicInteger(1)
