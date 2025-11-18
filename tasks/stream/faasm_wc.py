@@ -33,44 +33,51 @@ CURRENT_DATE = datetime.now().strftime("%Y-%m-%d")
 DURATION = 600
 INPUT_BATCHSIZE = 1
 NUM_INPUT_THREADS = 10
-INPUT_FILE = 'tasks/stream/data/Top100_Gutenberg_books.txt'
+INPUT_FILE = "tasks/stream/data/Top100_Gutenberg_books.txt"
 INPUT_MSG = {
     "user": "stream",
     "function": "wc_split",
 }
-RESULT_FILE = 'tasks/stream/logs/native_exp_wc.txt'
+RESULT_FILE = "tasks/stream/logs/native_exp_wc.txt"
 MAX_INPUT_COUNT = None
 INPUT_MAP = {"sentence": 0}
 
+
 def read_sentences_from_file(file_path):
     try:
-        with open(file_path, 'r') as file:
+        with open(file_path, "r") as file:
             text = file.read()
     except FileNotFoundError:
         print(f"File {file_path} not found.")
         return []
 
     # Remove all non-alphabetic characters and convert to lowercase
-    cleaned_text = re.sub(r'[^a-zA-Z\s]', '', text).lower()
-    
+    cleaned_text = re.sub(r"[^a-zA-Z\s]", "", text).lower()
+
     # Split text into words
     words = cleaned_text.split()
     print(f"Total words extracted: {len(words)}")
 
     # Group words into sentences of 10 words each
-    sentences = [[' '.join(words[i:i+10])] for i in range(0, len(words), 10)]
+    sentences = [
+        [" ".join(words[i : i + 10])] for i in range(0, len(words), 10)
+    ]
     print(f"Total sentences created: {len(sentences)}")
 
     return sentences
 
+
 @task(default=True)
-def run(ctx, input_rate, inputbatch = 1):
+def run(ctx, input_rate, inputbatch=1):
     """
     Use multiple threads to run the 'wordcount' application and check latency and throughput.
     """
     global INPUT_FILE, INPUT_MSG, RESULT_FILE, INPUT_MAP, NUM_INPUT_THREADS, DURATION
 
-    write_string_to_log(RESULT_FILE, f"New Exp --- Input Rates:{input_rate}, Batchsize: {inputbatch}, Workers: {NUM_INPUT_THREADS}, duration:{DURATION} \n")
+    write_string_to_log(
+        RESULT_FILE,
+        f"New Exp --- Input Rates:{input_rate}, Batchsize: {inputbatch}, Workers: {NUM_INPUT_THREADS}, duration:{DURATION} \n",
+    )
     records = read_sentences_from_file(INPUT_FILE)
     flush_workers()
     flush_scheduler()
@@ -99,7 +106,7 @@ def run(ctx, input_rate, inputbatch = 1):
             batch_queue,
             end_time,
             input_rate,
-            NUM_INPUT_THREADS
+            NUM_INPUT_THREADS,
         )
 
         # Start consumer threads
@@ -113,14 +120,16 @@ def run(ctx, input_rate, inputbatch = 1):
                     INPUT_MSG,
                     inputbatch,
                     end_time,
-                )
+                ),
             )
             input_threads.append(thread)
             thread.start()
 
     print(f"length of result json is {len(result_list)}")
 
-    np_result_message, function_metrics = statistics_result(result_list, DURATION, native = True)
+    np_result_message, function_metrics = statistics_result(
+        result_list, DURATION, native=True
+    )
     print(np_result_message)
     write_string_to_log(RESULT_FILE, np_result_message)
 
@@ -131,24 +140,27 @@ def run(ctx, input_rate, inputbatch = 1):
             print(f"  Average {metric_name}: {int(average_metric_time)} μs")
     write_metrics_to_log(RESULT_FILE, function_metrics)
 
+
 @task
 def overall_exp(ctx):
     global DURATION
     global RESULT_FILE
     global MAX_INPUT_COUNT
-    global NUM_INPUT_THREADS 
+    global NUM_INPUT_THREADS
 
     NUM_INPUT_THREADS = 10
 
     DURATION = 600
-    RESULT_FILE = 'tasks/stream/logs/native_exp_wc_overall.txt'
+    RESULT_FILE = "tasks/stream/logs/native_exp_wc_overall.txt"
     write_string_to_log(RESULT_FILE, CUTTING_LINE)
-    write_string_to_log(RESULT_FILE, "experiment result: native_exp_wc_overall")
+    write_string_to_log(
+        RESULT_FILE, "experiment result: native_exp_wc_overall"
+    )
 
     # input_rates = [1000, 2000, 3500, 5000, 6500]
     input_rates = [6500]
     for input_rate in input_rates:
-        run(ctx, input_rate = input_rate, inputbatch = 1)
+        run(ctx, input_rate=input_rate, inputbatch=1)
 
 
 @task
@@ -156,36 +168,41 @@ def latency_exp_3node(ctx):
     global DURATION
     global RESULT_FILE
     global MAX_INPUT_COUNT
-    global NUM_INPUT_THREADS 
+    global NUM_INPUT_THREADS
 
     NUM_INPUT_THREADS = 10
 
     DURATION = 600
-    RESULT_FILE = 'tasks/stream/logs/native_wc_latency_3node.txt'
+    RESULT_FILE = "tasks/stream/logs/native_wc_latency_3node.txt"
     write_string_to_log(RESULT_FILE, CUTTING_LINE)
-    write_string_to_log(RESULT_FILE, "experiment result: native_wc_latency_3node")
+    write_string_to_log(
+        RESULT_FILE, "experiment result: native_wc_latency_3node"
+    )
 
     input_rates = [1]
     for input_rate in input_rates:
-        run(ctx, input_rate = input_rate, inputbatch = 1)
+        run(ctx, input_rate=input_rate, inputbatch=1)
+
 
 @task
 def latency_exp_1node(ctx):
     """
-        inv stream.faasm-wc.latency-exp-1node
+    inv stream.faasm-wc.latency-exp-1node
     """
     global DURATION
     global RESULT_FILE
     global MAX_INPUT_COUNT
-    global NUM_INPUT_THREADS 
+    global NUM_INPUT_THREADS
 
     NUM_INPUT_THREADS = 1
 
     DURATION = 600
-    RESULT_FILE = 'tasks/stream/logs/native_wc_latency_1node.txt'
+    RESULT_FILE = "tasks/stream/logs/native_wc_latency_1node.txt"
     write_string_to_log(RESULT_FILE, CUTTING_LINE)
-    write_string_to_log(RESULT_FILE, "experiment result: native_wc_latency_1node")
+    write_string_to_log(
+        RESULT_FILE, "experiment result: native_wc_latency_1node"
+    )
 
     input_rates = [1]
     for input_rate in input_rates:
-        run(ctx, input_rate = input_rate, inputbatch = 1)
+        run(ctx, input_rate=input_rate, inputbatch=1)

@@ -72,14 +72,14 @@ def test(ctx, scale=2):
     global DURATION, INPUT_BATCHSIZE
     global RESULT_FILE
 
-    DURATION = 60
-    RESULT_FILE = "tasks/stream/logs/sd_temp_test.txt"
+    DURATION = 600
+    RESULT_FILE = "tasks/stream/logs/bg_state_test.txt"
 
     write_string_to_log(RESULT_FILE, CUTTING_LINE)
-    INPUT_BATCHSIZE = 1
+    INPUT_BATCHSIZE = 10
     concurrency = 5
     batchsize = 1
-    rate = 1
+    rate = 10
     schedule_mode = 0
 
     application_name = "stateless"

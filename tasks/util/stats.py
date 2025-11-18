@@ -305,6 +305,17 @@ def parse_log(path):
                 run_data["medianLatency"] = metrics_data.get("medianLatency")
                 run_data["p95Latency"] = metrics_data.get("p95Latency")
                 run_data["p99Latency"] = metrics_data.get("p99Latency")
+                run_data["medianTotalLatency"] = metrics_data.get(
+                    "medianTotalLatency"
+                )
+                run_data["p95TotalLatency"] = metrics_data.get(
+                    "p95TotalLatency"
+                )
+                run_data["p99TotalLatency"] = metrics_data.get(
+                    "p99TotalLatency"
+                )
+
+                run_data["workerStats"] = metrics_data.get("workerStats")
 
                 # Add the fully parsed data for this run to our results list
                 parsed_results.append(run_data)
@@ -322,7 +333,7 @@ def parse_log(path):
         df[col] = pd.to_numeric(df[col], errors="ignore")
 
     # Display the final table
-    print(df)
+    # print(df)
     return df
 
 

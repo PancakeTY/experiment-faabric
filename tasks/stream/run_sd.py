@@ -38,6 +38,7 @@ def run(
     duration,
     schedule_mode,
     pregenerated_work,
+    max_inflight_reqs,
 ):
     """
     Test the 'an' function with resource contention.
@@ -75,6 +76,7 @@ def run(
         input_rate=input_rate,
         duration=duration,
         schedule_mode=schedule_mode,
+        max_inflight_reqs=max_inflight_reqs,
     )
 
 
@@ -83,28 +85,41 @@ def test(ctx, scale=2):
     global DURATION, INPUT_BATCHSIZE
     global RESULT_FILE
 
-    DURATION = 100
-    RESULT_FILE = "tasks/stream/logs_hs/test_sd.txt"
+    DURATION = 200
+    RESULT_FILE = "tasks/stream/logs_hs/test_sd_5.txt"
 
     write_string_to_log(RESULT_FILE, CUTTING_LINE)
-    INPUT_BATCHSIZE = 12500
+    INPUT_BATCHSIZE = 15000
     concurrency = 5
     batchsize = 20
 
-    rates = [125000]
-    schedule_modes = [2, 0, 5, 6, 1, 3]
+    max_inflight_reqs = 150000
+
+    runtime_reconfig = 1
+    rates = [20000000]
+    schedule_modes = [7, 5, 3]
+
+    reset_stream_parameter("dispatch_period", 20)
+    reset_stream_parameter("batch_check_period", 20)
+    reset_stream_parameter("planner_call_interval", 20)
+    reset_stream_parameter("runtime_reconfig", runtime_reconfig)
+    reset_stream_parameter("runtime_reconfig_period", 10000)
+    reset_stream_parameter("parallel_dispatch", 1)
+    reset_stream_parameter("alpha", 300)
 
     # Prepare the input data
     records = read_data_from_txt_file_noparse(INPUT_FILE)
-    pregenerated_work = generate_all_input_batch(
-        records, INPUT_BATCHSIZE, INPUT_MAP, INPUT_MSG
+    pregenerated_work = (
+        generate_all_input_batch(
+            records, INPUT_BATCHSIZE, INPUT_MAP, INPUT_MSG
+        )
+        * 50
     )
 
     for schedule_mode in schedule_modes:
-
         for rate in rates:
             timestamp = datetime.now().strftime("%d--%b--%Y %H:%M:%S")
-            start_message = f"{timestamp} Running with rate={rate}, batchsize={batchsize}, concurrency={concurrency}, inputbatch={INPUT_BATCHSIZE}, scale={scale}, duration={DURATION}, schedulemode={schedule_mode}"
+            start_message = f"{timestamp} Running with rate={rate}, batchsize={batchsize}, concurrency={concurrency}, inputbatch={INPUT_BATCHSIZE}, scale={scale}, duration={DURATION}, schedulemode={schedule_mode}, runtime_reconfig={runtime_reconfig}"
             write_string_to_log(RESULT_FILE, start_message)
             # Call the test_contention task with the current batchsize
             run(
@@ -117,6 +132,64 @@ def test(ctx, scale=2):
                 duration=DURATION,
                 schedule_mode=schedule_mode,
                 pregenerated_work=pregenerated_work,
+                max_inflight_reqs=max_inflight_reqs,
+            )
+            print(f"Completed test_contention with con: {concurrency}")
+
+
+@task
+def test20(ctx, scale=2):
+    global DURATION, INPUT_BATCHSIZE
+    global RESULT_FILE
+
+    DURATION = 200
+    RESULT_FILE = "tasks/stream/logs_hs/test_sd_20.txt"
+
+    write_string_to_log(RESULT_FILE, CUTTING_LINE)
+    INPUT_BATCHSIZE = 30000
+    concurrency = 5
+    batchsize = 20
+
+    max_inflight_reqs = 300000
+
+    runtime_reconfig = 1
+    rates = [20000000]
+    schedule_modes = [7, 5, 3]
+
+    reset_stream_parameter("dispatch_period", 20)
+    reset_stream_parameter("batch_check_period", 20)
+    reset_stream_parameter("planner_call_interval", 20)
+    reset_stream_parameter("runtime_reconfig", runtime_reconfig)
+    reset_stream_parameter("runtime_reconfig_period", 10000)
+    reset_stream_parameter("parallel_dispatch", 1)
+    reset_stream_parameter("alpha", 300)
+
+    # Prepare the input data
+    records = read_data_from_txt_file_noparse(INPUT_FILE)
+    pregenerated_work = (
+        generate_all_input_batch(
+            records, INPUT_BATCHSIZE, INPUT_MAP, INPUT_MSG
+        )
+        * 50
+    )
+
+    for schedule_mode in schedule_modes:
+        for rate in rates:
+            timestamp = datetime.now().strftime("%d--%b--%Y %H:%M:%S")
+            start_message = f"{timestamp} Running with rate={rate}, batchsize={batchsize}, concurrency={concurrency}, inputbatch={INPUT_BATCHSIZE}, scale={scale}, duration={DURATION}, schedulemode={schedule_mode}, runtime_reconfig={runtime_reconfig}"
+            write_string_to_log(RESULT_FILE, start_message)
+            # Call the test_contention task with the current batchsize
+            run(
+                ctx,
+                scale=scale,
+                batchsize=batchsize,
+                concurrency=concurrency,
+                inputbatch=INPUT_BATCHSIZE,
+                input_rate=rate,
+                duration=DURATION,
+                schedule_mode=schedule_mode,
+                pregenerated_work=pregenerated_work,
+                max_inflight_reqs=max_inflight_reqs,
             )
             print(f"Completed test_contention with con: {concurrency}")
 
@@ -128,6 +201,22 @@ def stats(ctx):
 
     average_metrics(df)
 
+    valid_modes = [7, 3, 5]
+
+    # Filter the DataFrame to preserve only the rows with the valid modes.
+    # Note: Replace 'schedule_mode' with the actual column name if it's different.
+    df = df[df["schedulemode"].isin(valid_modes)]
+
+    # 2. Create a dictionary to map the mode numbers to their names.
+    scheduler_map = {
+        7: "Centralized Scheduler",
+        3: "FaaSFlow",
+        5: "Our Method",
+    }
+
+    # 3. Create a new column 'scheduler_name' with the descriptive names.
+    df["schedulemode"] = df["schedulemode"].map(scheduler_map)
+
     plot_stats("sd", df)
 
 
@@ -136,7 +225,7 @@ def trans_exp(ctx, scale=2):
     global DURATION, INPUT_BATCHSIZE
     global RESULT_FILE
 
-    DURATION = 100
+    DURATION = 600
     RESULT_FILE = "tasks/stream/logs_hs/trans_sd.txt"
 
     write_string_to_log(RESULT_FILE, CUTTING_LINE)
@@ -144,12 +233,18 @@ def trans_exp(ctx, scale=2):
     concurrency = 1
     batchsize = 1
 
-    rates = [1]
-    schedule_modes = [2, 5, 3] * 3
+    max_inflight_reqs = 1
+
+    rates = [20]
+    schedule_modes = [7, 5, 3] * 3
 
     reset_stream_parameter("dispatch_period", 0)
     reset_stream_parameter("batch_check_period", 0)
     reset_stream_parameter("runtime_reconfig", 0)
+    reset_stream_parameter("planner_call_interval", 0)
+    reset_stream_parameter("runtime_reconfig_period", 1000)
+    reset_stream_parameter("parallel_dispatch", 1)
+    reset_stream_parameter("max_inflight_reqs", 1000)
 
     # Prepare the input data
     records = read_data_from_txt_file_noparse(INPUT_FILE)
@@ -158,7 +253,6 @@ def trans_exp(ctx, scale=2):
     )
 
     for schedule_mode in schedule_modes:
-
         for rate in rates:
             timestamp = datetime.now().strftime("%d--%b--%Y %H:%M:%S")
             start_message = f"{timestamp} Running with rate={rate}, batchsize={batchsize}, concurrency={concurrency}, inputbatch={INPUT_BATCHSIZE}, scale={scale}, duration={DURATION}, schedulemode={schedule_mode}"
@@ -174,6 +268,7 @@ def trans_exp(ctx, scale=2):
                 duration=DURATION,
                 schedule_mode=schedule_mode,
                 pregenerated_work=pregenerated_work,
+                max_inflight_reqs=max_inflight_reqs,
             )
             print(f"Completed test_contention with con: {concurrency}")
 
@@ -220,5 +315,232 @@ def disp(ctx, scale=2):
                 duration=DURATION,
                 schedule_mode=schedule_mode,
                 pregenerated_work=pregenerated_work,
+            )
+            print(f"Completed test_contention with con: {concurrency}")
+
+
+@task
+def reconfig(ctx, scale=2):
+    global DURATION, INPUT_BATCHSIZE
+    global RESULT_FILE
+
+    DURATION = 600
+    RESULT_FILE = "tasks/stream/logs_hs/reconfig_sd_config.txt"
+
+    write_string_to_log(RESULT_FILE, CUTTING_LINE)
+    INPUT_BATCHSIZE = 15000
+    concurrency = 5
+    batchsize = 20
+
+    max_inflight_reqs = 150000
+
+    runtime_reconfig = 1
+    rates = [15000000]
+    schedule_modes = [5] * 3
+
+    reset_stream_parameter("dispatch_period", 20)
+    reset_stream_parameter("batch_check_period", 20)
+    reset_stream_parameter("planner_call_interval", 20)
+    reset_stream_parameter("runtime_reconfig", runtime_reconfig)
+    reset_stream_parameter("runtime_reconfig_period", 20000)
+    reset_stream_parameter("parallel_dispatch", 1)
+    reset_stream_parameter("alpha", 50)
+
+    # Prepare the input data
+    records = read_data_from_txt_file_noparse(INPUT_FILE)
+    pregenerated_work = (
+        generate_all_input_batch(
+            records, INPUT_BATCHSIZE, INPUT_MAP, INPUT_MSG
+        )
+        * 50
+    )
+
+    for schedule_mode in schedule_modes:
+        for rate in rates:
+            timestamp = datetime.now().strftime("%d--%b--%Y %H:%M:%S")
+            start_message = f"{timestamp} Running with rate={rate}, batchsize={batchsize}, concurrency={concurrency}, inputbatch={INPUT_BATCHSIZE}, scale={scale}, duration={DURATION}, schedulemode={schedule_mode}, runtime_reconfig={runtime_reconfig}"
+            write_string_to_log(RESULT_FILE, start_message)
+            # Call the test_contention task with the current batchsize
+            run(
+                ctx,
+                scale=scale,
+                batchsize=batchsize,
+                concurrency=concurrency,
+                inputbatch=INPUT_BATCHSIZE,
+                input_rate=rate,
+                duration=DURATION,
+                schedule_mode=schedule_mode,
+                pregenerated_work=pregenerated_work,
+                max_inflight_reqs=max_inflight_reqs,
+            )
+            print(f"Completed test_contention with con: {concurrency}")
+
+
+@task
+def noreconfig(ctx, scale=2):
+    global DURATION, INPUT_BATCHSIZE
+    global RESULT_FILE
+
+    DURATION = 600
+    RESULT_FILE = "tasks/stream/logs_hs/reconfig_sd_noconfig.txt"
+
+    write_string_to_log(RESULT_FILE, CUTTING_LINE)
+    INPUT_BATCHSIZE = 15000
+    concurrency = 5
+    batchsize = 20
+
+    max_inflight_reqs = 150000
+
+    runtime_reconfig = 0
+    rates = [15000000]
+    schedule_modes = [5] * 3
+
+    reset_stream_parameter("dispatch_period", 20)
+    reset_stream_parameter("batch_check_period", 20)
+    reset_stream_parameter("planner_call_interval", 20)
+    reset_stream_parameter("runtime_reconfig", runtime_reconfig)
+    reset_stream_parameter("runtime_reconfig_period", 20000)
+    reset_stream_parameter("parallel_dispatch", 1)
+    reset_stream_parameter("alpha", 50)
+
+    # Prepare the input data
+    records = read_data_from_txt_file_noparse(INPUT_FILE)
+    pregenerated_work = (
+        generate_all_input_batch(
+            records, INPUT_BATCHSIZE, INPUT_MAP, INPUT_MSG
+        )
+        * 50
+    )
+
+    for schedule_mode in schedule_modes:
+        for rate in rates:
+            timestamp = datetime.now().strftime("%d--%b--%Y %H:%M:%S")
+            start_message = f"{timestamp} Running with rate={rate}, batchsize={batchsize}, concurrency={concurrency}, inputbatch={INPUT_BATCHSIZE}, scale={scale}, duration={DURATION}, schedulemode={schedule_mode}, runtime_reconfig={runtime_reconfig}"
+            write_string_to_log(RESULT_FILE, start_message)
+            # Call the test_contention task with the current batchsize
+            run(
+                ctx,
+                scale=scale,
+                batchsize=batchsize,
+                concurrency=concurrency,
+                inputbatch=INPUT_BATCHSIZE,
+                input_rate=rate,
+                duration=DURATION,
+                schedule_mode=schedule_mode,
+                pregenerated_work=pregenerated_work,
+                max_inflight_reqs=max_inflight_reqs,
+            )
+            print(f"Completed test_contention with con: {concurrency}")
+
+
+@task
+def cpu(ctx, scale=5):
+    global DURATION, INPUT_BATCHSIZE
+    global RESULT_FILE
+
+    DURATION = 600
+    RESULT_FILE = "tasks/stream/logs_hs/cpu_sd.txt"
+
+    write_string_to_log(RESULT_FILE, CUTTING_LINE)
+    INPUT_BATCHSIZE = 5000
+    concurrency = 5
+    batchsize = 1
+
+    max_inflight_reqs = 50000
+
+    runtime_reconfig = 1
+    rates = [15000000]
+    schedule_modes = [5] * 1
+
+    reset_stream_parameter("dispatch_period", 20)
+    reset_stream_parameter("batch_check_period", 20)
+    reset_stream_parameter("planner_call_interval", 20)
+    reset_stream_parameter("runtime_reconfig", runtime_reconfig)
+    reset_stream_parameter("runtime_reconfig_period", 10000)
+    reset_stream_parameter("parallel_dispatch", 0)
+
+    # Prepare the input data
+    records = read_data_from_txt_file_noparse(INPUT_FILE)
+    pregenerated_work = (
+        generate_all_input_batch(
+            records, INPUT_BATCHSIZE, INPUT_MAP, INPUT_MSG
+        )
+        * 50
+    )
+
+    for schedule_mode in schedule_modes:
+        for rate in rates:
+            timestamp = datetime.now().strftime("%d--%b--%Y %H:%M:%S")
+            start_message = f"{timestamp} Running with rate={rate}, batchsize={batchsize}, concurrency={concurrency}, inputbatch={INPUT_BATCHSIZE}, scale={scale}, duration={DURATION}, schedulemode={schedule_mode}"
+            write_string_to_log(RESULT_FILE, start_message)
+            # Call the test_contention task with the current batchsize
+            run(
+                ctx,
+                scale=scale,
+                batchsize=batchsize,
+                concurrency=concurrency,
+                inputbatch=INPUT_BATCHSIZE,
+                input_rate=rate,
+                duration=DURATION,
+                schedule_mode=schedule_mode,
+                pregenerated_work=pregenerated_work,
+                max_inflight_reqs=max_inflight_reqs,
+            )
+            print(f"Completed test_contention with con: {concurrency}")
+
+
+@task
+def test3(ctx, scale=2):
+    global DURATION, INPUT_BATCHSIZE
+    global RESULT_FILE
+
+    DURATION = 600
+    RESULT_FILE = "tasks/stream/logs_hs/test_sd_3.txt"
+
+    write_string_to_log(RESULT_FILE, CUTTING_LINE)
+    INPUT_BATCHSIZE = 15000
+    concurrency = 5
+    batchsize = 20
+
+    max_inflight_reqs = 150000
+
+    runtime_reconfig = 1
+    rates = [20000000]
+    schedule_modes = [7, 5, 3]*4
+
+    reset_stream_parameter("dispatch_period", 20)
+    reset_stream_parameter("batch_check_period", 20)
+    reset_stream_parameter("planner_call_interval", 20)
+    reset_stream_parameter("runtime_reconfig", runtime_reconfig)
+    reset_stream_parameter("runtime_reconfig_period", 10000)
+    reset_stream_parameter("parallel_dispatch", 1)
+    reset_stream_parameter("alpha", 300)
+
+    # Prepare the input data
+    records = read_data_from_txt_file_noparse(INPUT_FILE)
+    pregenerated_work = (
+        generate_all_input_batch(
+            records, INPUT_BATCHSIZE, INPUT_MAP, INPUT_MSG
+        )
+        * 50
+    )
+
+    for schedule_mode in schedule_modes:
+        for rate in rates:
+            timestamp = datetime.now().strftime("%d--%b--%Y %H:%M:%S")
+            start_message = f"{timestamp} Running with rate={rate}, batchsize={batchsize}, concurrency={concurrency}, inputbatch={INPUT_BATCHSIZE}, scale={scale}, duration={DURATION}, schedulemode={schedule_mode}, runtime_reconfig={runtime_reconfig}"
+            write_string_to_log(RESULT_FILE, start_message)
+            # Call the test_contention task with the current batchsize
+            run(
+                ctx,
+                scale=scale,
+                batchsize=batchsize,
+                concurrency=concurrency,
+                inputbatch=INPUT_BATCHSIZE,
+                input_rate=rate,
+                duration=DURATION,
+                schedule_mode=schedule_mode,
+                pregenerated_work=pregenerated_work,
+                max_inflight_reqs=max_inflight_reqs,
             )
             print(f"Completed test_contention with con: {concurrency}")

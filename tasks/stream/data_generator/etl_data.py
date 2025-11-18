@@ -10,10 +10,10 @@ OUTPUT_PATH = (
 )
 
 # Define the number of data rows to generate.
-NUM_ROWS = 2000000
+NUM_ROWS = 500000
 
 # Define the ranges for the random data generation.
-MSG_ID_RANGE = (100, 301)
+MSG_ID_RANGE = (100, 121)
 SENSOR_ID_RANGE = (1, 6)
 OBS_TYPE_RANGE = (1, 201)
 OBS_VALUE_RANGE = (1, 101)
@@ -25,9 +25,18 @@ def generate_dataset():
     Generates a dataset based on specified parameters and writes it to a file.
     """
     print(f"Generating {NUM_ROWS} data rows and writing to {OUTPUT_PATH}...")
+    weighted_msg_ids = []
+    for i in range(MSG_ID_RANGE[0], MSG_ID_RANGE[1] + 1):
+        if i % 3 == 0:
+            # For some msg_id, add it to the list more times
+            weighted_msg_ids.extend([i] * 20)
+        else:
+            # Otherwise, add it once
+            weighted_msg_ids.append(i)
+
     with open(OUTPUT_PATH, "w") as f:
         for _ in range(NUM_ROWS):
-            msg_id = random.randint(MSG_ID_RANGE[0], MSG_ID_RANGE[1])
+            msg_id = random.choice(weighted_msg_ids)
             sensor_id = (
                 f"s{random.randint(SENSOR_ID_RANGE[0], SENSOR_ID_RANGE[1])}"
             )

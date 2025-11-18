@@ -579,4 +579,4 @@ def plot_stats(application, df):
 
     # 4. Final adjustments and display the plot
     plt.tight_layout(rect=[0, 0.03, 1, 0.96])
-    plt.savefig(f"tasks/stream/figure/stats_{application}.png")
+    plt.savefig(f"tasks/stream/pdf_hs/stats_{application}.pdf")

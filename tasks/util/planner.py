@@ -25,6 +25,7 @@ from faasmctl.util.planner import (
     get_in_fligh_apps as planner_get_in_fligh_apps,
     set_persistent_state,
     custom_request,
+    get_in_fligh_apps_num,
 )
 
 
@@ -297,6 +298,12 @@ def format_nodes(nodes):
     return nodes
 
 
+def wait_for_running_apps():
+    while (running_num := get_in_fligh_apps_num()) != 0:
+        print(f"Still running {running_num} requests, please wait...")
+        sleep(1)
+
+
 def run_application_with_input(
     application_name: str,
     nodes,
@@ -310,6 +317,7 @@ def run_application_with_input(
     input_rate: float,
     duration: float,
     schedule_mode: int,
+    max_inflight_reqs: int,
     persistent_state=None,
     num_hosts_scheduled_in=0,
     reschedule=True,
@@ -320,13 +328,15 @@ def run_application_with_input(
         f"Concurrency:{concurrency}, InputBatch:{inputbatch}, Scale:{scale}\n",
     )
 
+    wait_for_running_apps()
+
     # Flush the scheduler and workers
     flush_all()
 
     reset_stream_parameter("schedule_mode", schedule_mode)
     format_nodes(nodes)
     # if num_hosts_scheduled_in > 0:
-    #     reset_stream_parameter("num_hosts_scheduled", num_hosts_scheduled_in)
+    reset_stream_parameter("num_hosts_scheduled", 3)
     register_application(application_name, nodes)
 
     if persistent_state is not None:
@@ -339,7 +349,7 @@ def run_application_with_input(
         reset_batch_size(batchsize)
 
     # If schedule mode is 0 or 3 (Our designed scheduler or FaaSFlow scheduler)
-    if reschedule and schedule_mode in (0, 3, 5):
+    if reschedule and schedule_mode in (7, 3, 5):
         print("Pre-invoking the application...")
         pre_num_batches = int(10000 / inputbatch)
         if inputbatch == 1:
@@ -354,10 +364,12 @@ def run_application_with_input(
             )
         print("Pre-invocation complete, rescheduling...")
         time.sleep(5)
+        wait_for_running_apps()
+
         custom_request(key="reschedule", value="1")
         print("Rescheduling complete.")
 
-    reset_stream_parameter("max_inflight_reqs", input_rate)
+    reset_stream_parameter("max_inflight_reqs", max_inflight_reqs)
 
     # Initialize variables for running application
     atomic_counter = AtomicInteger(1)
@@ -421,6 +433,8 @@ def run_application_with_input(
 
     print("All threads finished and waiting for the application to finish...")
     time.sleep(10)
+
+    wait_for_running_apps()
 
     stats_result_str = output_result()
 

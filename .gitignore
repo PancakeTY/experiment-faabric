@@ -28,3 +28,7 @@ tasks/stream/logs/
 tasks/stream/figure/
 tasks/stream/pdf/
 tasks/stream/pdf-backup/
+tasks/stream/logs_hs/
+tasks/stream/pdf_hs/
+tasks/stream/logs_elst/
+tasks/stream/pdf_elst/
