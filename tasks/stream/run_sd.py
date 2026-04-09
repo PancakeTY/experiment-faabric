@@ -2,7 +2,10 @@ from datetime import datetime
 from invoke import task
 
 from faasmctl.util.planner import reset_stream_parameter
-from tasks.util.planner import run_application_with_input
+from tasks.util.planner import (
+    run_application_with_input,
+    configure_stream_params,
+)
 from tasks.util.faasm import generate_all_input_batch, write_string_to_log
 from tasks.util.file import read_data_from_txt_file_noparse
 from tasks.util.stats import parse_log, average_metrics
@@ -543,20 +546,6 @@ def test3(ctx, scale=2):
             print(f"Completed test_contention with con: {concurrency}")
 
 
-def configure_stream_params(settings):
-    """Resets stream parameters based on a dictionary."""
-    defaults = {
-        "dispatch_period": 20,
-        "batch_check_period": 20,
-        "planner_call_interval": 20,
-        "parallel_dispatch": 0,
-    }
-    # Merge defaults with specific settings
-    final_settings = {**defaults, **settings}
-    for key, value in final_settings.items():
-        reset_stream_parameter(key, value)
-
-
 def get_pregenerated_work(batch_size):
     """Loads and prepares the input data."""
     records = read_data_from_txt_file_noparse(INPUT_FILE)
@@ -607,12 +596,7 @@ def execute_benchmark(
             else [(r, 0) for r in rates]
         ):
             timestamp = datetime.now().strftime("%d--%b--%Y %H:%M:%S")
-            msg = (
-                f"{timestamp} Running with rate={rate}, batchsize={batchsize}, "
-                f"concurrency={concurrency}, inputbatch={inputbatch}, "
-                f"scale={scale}, duration={DURATION}, schedulemode={mode}, "
-                f"hosts={num_hosts}, max_inflight={max_inflight}"
-            )
+            msg = f"{timestamp} Running with duration={DURATION}, rate={rate}, inputbatch={inputbatch}, batchsize={batchsize}, scale={scale}, concurrency={concurrency}, max_inflight={max_inflight}, max_waiting_queue_size={max_waiting_queue_size}, hosts={num_hosts}, schedulemode={mode}"
             write_string_to_log(RESULT_FILE, msg)
 
             run(
@@ -631,18 +615,18 @@ def execute_benchmark(
 
 
 @task
-def host(ctx, scale=5):
+def host(ctx):
     execute_benchmark(
         ctx,
-        result_file="tasks/stream/logs_elst/host_sd_fix_rate_1.txt",
+        result_file="tasks/stream/logs_elst/host_sd_fix_rate.txt",
         duration=50,
-        scale=scale,
-        schedule_modes=[0],
-        inputbatch=500,
         rates=[3000],
-        max_inflight=3000,
-        max_waiting_queue_size=3000,
+        inputbatch=500,
         batchsize=1,
-        hosts_range=[1, 3, 5, 7, 10],
-        reconfig_period=1000,
+        scale=5,
+        concurrency=10,
+        max_inflight=3000,
+        max_waiting_queue_size=10000,
+        schedule_modes=[0],
+        hosts_range=[1, 3],
     )

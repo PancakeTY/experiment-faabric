@@ -15,8 +15,12 @@ import time
 # Utility imports for Faasm and task management
 from faasmctl.util.flush import flush_workers, flush_scheduler
 from faasmctl.util.planner import (
-    reset_batch_size, scale_function_parallelism, reset_stream_parameter,
-    register_function_state, reset_max_replicas, output_result
+    reset_batch_size,
+    scale_function_parallelism,
+    reset_stream_parameter,
+    register_function_state,
+    reset_max_replicas,
+    output_result,
 )
 from faasmctl.util.invoke import query_result
 from tasks.util.thread import (
@@ -26,6 +30,7 @@ from tasks.util.thread import (
 )
 from tasks.util.file import copy_outout, load_app_results
 from tasks.util.k8s import flush_redis
+
 # Custom utility functions
 from tasks.util.faasm import (
     post_async_batch_msg,
@@ -36,7 +41,12 @@ from tasks.util.faasm import (
 )
 
 from tasks.util.stats import extract_data, extract_avg_tuple_duration
-from tasks.util.plot import varied_para_plot_util, varied_batch_plot_util, varied_con_plot_util, overall_plot_util
+from tasks.util.plot import (
+    varied_para_plot_util,
+    varied_batch_plot_util,
+    varied_con_plot_util,
+    overall_plot_util,
+)
 
 # Static
 CUTTING_LINE = "-------------------------------------------------------------------------------"
@@ -45,32 +55,48 @@ CURRENT_DATE = datetime.now().strftime("%Y-%m-%d")
 DURATION = 600
 INPUT_BATCHSIZE = 300
 NUM_INPUT_THREADS = 10
-INPUT_FILE = 'tasks/stream/data/machine_usage.csv'
+INPUT_FILE = "tasks/stream/data/machine_usage.csv"
 INPUT_MSG = {
     "user": "stream",
     "function": "mo_score",
 }
-RESULT_FILE = 'tasks/stream/logs/exp_mo_results.txt'
+RESULT_FILE = "tasks/stream/logs/exp_mo_results.txt"
 INPUT_MAP = {"machineId": 0, "timestamp": 1, "cpu": 2, "mem": 3}
+
 
 def read_data_from_file(file_path):
     records = []
-    with open(file_path, 'r') as file:  # Open the file
+    with open(file_path, "r") as file:  # Open the file
         reader = csv.reader(file)
         for data in reader:
-            data[0] = data[0].replace('m_', '')  # Remove 'm_' from the first element
+            data[0] = data[0].replace(
+                "m_", ""
+            )  # Remove 'm_' from the first element
             records.append(data)
     return records
 
+
 @task
-def run(ctx, scale, batchsize, concurrency, inputbatch, input_rate, duration, max_inflight_reqs = 15000):    
+def run(
+    ctx,
+    scale,
+    batchsize,
+    concurrency,
+    inputbatch,
+    input_rate,
+    duration,
+    max_inflight_reqs=15000,
+):
     """
     Test the 'machine outlier' function with resource contention.
     Input rate unit: data/ second
     """
     global INPUT_FILE, INPUT_MSG, RESULT_FILE, INPUT_MAP
     global NUM_INPUT_THREADS
-    write_string_to_log(RESULT_FILE, f"Input Rates:{input_rate}, Batchsize: {batchsize}, Concurrency: {concurrency}, InputBatch:{inputbatch}, Scale: {scale}\n")
+    write_string_to_log(
+        RESULT_FILE,
+        f"Input Rates:{input_rate}, Batchsize: {batchsize}, Concurrency: {concurrency}, InputBatch:{inputbatch}, Scale: {scale}\n",
+    )
 
     records = read_data_from_file(INPUT_FILE)
     flush_workers()
@@ -78,24 +104,32 @@ def run(ctx, scale, batchsize, concurrency, inputbatch, input_rate, duration, ma
     flush_redis()
 
     register_function_state("stream_mo_score", "None", "None")
-    register_function_state("stream_mo_anomaly", "partitionedAttribute", "partitionStateKey")
+    register_function_state(
+        "stream_mo_anomaly", "partitionedAttribute", "partitionStateKey"
+    )
     register_function_state("stream_mo_alert", "None", "None")
     reset_stream_parameter("is_outputting", 0)
     reset_stream_parameter("max_inflight_reqs", max_inflight_reqs)
 
     input_data = generate_input_data(records, 0, 10, INPUT_MAP)
-    chained_id_return = post_async_batch_msg(100000, INPUT_MSG, batch_size = 10, input_list = input_data, chained_id_list = list(range(1, 11)))
-    
+    chained_id_return = post_async_batch_msg(
+        100000,
+        INPUT_MSG,
+        batch_size=10,
+        input_list=input_data,
+        chained_id_list=list(range(1, 11)),
+    )
+
     for chained_id in chained_id_return:
         query_result(chained_id)
-    
+
     # Adjust the parameters
     if scale > 1:
-        scale_function_parallelism("stream", "mo_anomaly" ,scale)
+        scale_function_parallelism("stream", "mo_anomaly", scale)
 
     if batchsize > 0:
         reset_batch_size(batchsize)
-    
+
     if concurrency > 0:
         reset_max_replicas(concurrency)
 
@@ -103,7 +137,7 @@ def run(ctx, scale, batchsize, concurrency, inputbatch, input_rate, duration, ma
     appid_list = []
     appid_list_lock = threading.Lock()
     input_threads = []
-    
+
     batch_queue = Queue()
 
     # Launch multiple threads
@@ -123,7 +157,7 @@ def run(ctx, scale, batchsize, concurrency, inputbatch, input_rate, duration, ma
             batch_queue,
             end_time,
             input_rate,
-            NUM_INPUT_THREADS
+            NUM_INPUT_THREADS,
         )
 
         # Start consumer threads
@@ -137,7 +171,7 @@ def run(ctx, scale, batchsize, concurrency, inputbatch, input_rate, duration, ma
                     INPUT_MSG,
                     inputbatch,
                     end_time,
-                )
+                ),
             )
             input_threads.append(thread)
             thread.start()
@@ -155,7 +189,7 @@ def run(ctx, scale, batchsize, concurrency, inputbatch, input_rate, duration, ma
     print("All threads finished")
     time.sleep(10)
 
-    # Get results from 
+    # Get results from
     get_result_start_time = None
     result_output = False
     while not result_output:
@@ -170,7 +204,9 @@ def run(ctx, scale, batchsize, concurrency, inputbatch, input_rate, duration, ma
     get_result_end_time = time.time()
     fetch_result_duration = get_result_end_time - get_result_start_time
     print(f"Duration to get result: {fetch_result_duration}")
-    np_result_message, function_metrics = statistics_result(batches_result, duration, function_include = "mo_alert")
+    np_result_message, function_metrics = statistics_result(
+        batches_result, duration, function_include="mo_alert"
+    )
     print(np_result_message)
     write_string_to_log(RESULT_FILE, np_result_message)
 
@@ -182,8 +218,11 @@ def run(ctx, scale, batchsize, concurrency, inputbatch, input_rate, duration, ma
                 print(f" Sum Count {metric_name}: {int(metric_value)}")
             else:
                 average_metric_time = sum(times) / len(times) if times else 0
-                print(f"  Average {metric_name}: {int(average_metric_time)} μs")
+                print(
+                    f"  Average {metric_name}: {int(average_metric_time)} μs"
+                )
     write_metrics_to_log(RESULT_FILE, function_metrics)
+
 
 # Experiment for overall performance
 @task
@@ -191,15 +230,15 @@ def overall_exp(ctx, scale=3):
     """
     inv stream.run-mo.overall-exp
     Run the 'overall performance' experiments of spike detection application.
-    Basic setup: 
-    scale 3; batchsize 20; concurrency 10; inputbatch 20; 
+    Basic setup:
+    scale 3; batchsize 20; concurrency 10; inputbatch 20;
     input rates: 1000, 2000, 3000, 4000, 6000, 8000, 10000, 12000
     runtime: 10 minutes or all the data are processed
     """
     global DURATION
     global RESULT_FILE
 
-    RESULT_FILE = 'tasks/stream/logs/exp_mo_oeverall.txt'
+    RESULT_FILE = "tasks/stream/logs/exp_mo_oeverall.txt"
     write_string_to_log(RESULT_FILE, CUTTING_LINE)
     inputbatch = 500
     concurrency = 10
@@ -211,49 +250,68 @@ def overall_exp(ctx, scale=3):
         if rate < inputbatch:
             inputbatch = rate
         timestamp = datetime.now().strftime("%d--%b--%Y %H:%M:%S")
-        start_message = f"{timestamp} Running with rate={rate}, batchsize={batchsize}, concurrency={concurrency}, inputbatch={inputbatch}, scale={scale}, duration={DURATION}"   
+        start_message = f"{timestamp} Running with rate={rate}, batchsize={batchsize}, concurrency={concurrency}, inputbatch={inputbatch}, scale={scale}, duration={DURATION}"
         write_string_to_log(RESULT_FILE, start_message)
         # Call the test_contention task with the current batchsize
         while True:
             try:
                 # Call the test_contention task with the current batchsize
-                run(ctx, scale=scale, batchsize=batchsize, concurrency=concurrency, inputbatch=inputbatch, input_rate=rate, duration=DURATION)
+                run(
+                    ctx,
+                    scale=scale,
+                    batchsize=batchsize,
+                    concurrency=concurrency,
+                    inputbatch=inputbatch,
+                    input_rate=rate,
+                    duration=DURATION,
+                )
                 print(f"Completed test_contention with con: {concurrency}")
                 break  # Break the loop if the function completes successfully
             except Exception as e:
                 # Log the error message
-                error_timestamp = datetime.now().strftime("%d--%b--%Y %H:%M:%S")
+                error_timestamp = datetime.now().strftime(
+                    "%d--%b--%Y %H:%M:%S"
+                )
                 error_message = f"{error_timestamp} Error occurred: {e}. Retrying in 1 minute..."
                 write_string_to_log(RESULT_FILE, error_message)
                 print(error_message)
-                
+
                 # Wait for 1 minute before retrying
                 time.sleep(60)
 
-                
+
 @task
 def overall_plot(ctx):
     data = extract_data("tasks/stream/logs/exp_mo_oeverall.txt", "mo_alert")
     df = pd.DataFrame(data)
 
     # Convert columns to appropriate data types
-    df['Input Rate'] = df['Input Rate'].astype(int)
-    df['Scale'] = df['Scale'].astype(int)
-    df['99th Percentile Actual Time (ms)'] = df['99th Percentile Actual Time (ms)'].astype(float)
-    df['Throughput (msg/sec)'] = df['Throughput (msg/sec)'].astype(float)
-    df['Input Rate'] = df['Input Rate'].replace(9223372036854775807, float('inf'))
+    df["Input Rate"] = df["Input Rate"].astype(int)
+    df["Scale"] = df["Scale"].astype(int)
+    df["99th Percentile Actual Time (ms)"] = df[
+        "99th Percentile Actual Time (ms)"
+    ].astype(float)
+    df["Throughput (msg/sec)"] = df["Throughput (msg/sec)"].astype(float)
+    df["Input Rate"] = df["Input Rate"].replace(
+        9223372036854775807, float("inf")
+    )
 
-    pd.set_option('display.max_rows', None)
-    sorted_df = df.sort_values(by=['Batch Size', 'Input Rate'])
+    pd.set_option("display.max_rows", None)
+    sorted_df = df.sort_values(by=["Batch Size", "Input Rate"])
     print(sorted_df)
 
-    duplicates = df[df.duplicated(['Throughput (msg/sec)'], keep=False)]
+    duplicates = df[df.duplicated(["Throughput (msg/sec)"], keep=False)]
     print(duplicates)
 
-    grouped_counts = df.groupby(['Batch Size', 'Input Rate']).size().reset_index(name='counts')
+    grouped_counts = (
+        df.groupby(["Batch Size", "Input Rate"])
+        .size()
+        .reset_index(name="counts")
+    )
     print(grouped_counts)
 
     overall_plot_util(df, "mo")
+
 
 # Experiment for different scale performance
 @task
@@ -268,9 +326,9 @@ def varied_para_exp(ctx, scale=3):
     """
     global DURATION
     global RESULT_FILE
-    
+
     # RESULT_FILE = 'tasks/stream/logs/exp_mo_para.txt'
-    RESULT_FILE = 'tasks/stream/logs/exp_mo_para.txt'
+    RESULT_FILE = "tasks/stream/logs/exp_mo_para.txt"
 
     write_string_to_log(RESULT_FILE, CUTTING_LINE)
     write_string_to_log(RESULT_FILE, "experiment result: varied parallelism")
@@ -286,55 +344,74 @@ def varied_para_exp(ctx, scale=3):
     for scale in scale_list:
         for rate in rates:
             timestamp = datetime.now().strftime("%d--%b--%Y %H:%M:%S")
-            start_message = f"{timestamp} Running with rate={rate}, batchsize={batchsize}, concurrency={concurrency}, inputbatch={inputbatch}, scale={scale}, duration={DURATION}"   
+            start_message = f"{timestamp} Running with rate={rate}, batchsize={batchsize}, concurrency={concurrency}, inputbatch={inputbatch}, scale={scale}, duration={DURATION}"
             write_string_to_log(RESULT_FILE, start_message)
             # Call the test_contention task with the current batchsize
             while True:
                 try:
                     # Call the test_contention task with the current batchsize
-                    run(ctx, scale=scale, batchsize=batchsize, concurrency=concurrency, inputbatch=inputbatch, input_rate=rate, duration=DURATION)
+                    run(
+                        ctx,
+                        scale=scale,
+                        batchsize=batchsize,
+                        concurrency=concurrency,
+                        inputbatch=inputbatch,
+                        input_rate=rate,
+                        duration=DURATION,
+                    )
                     print(f"Completed test_contention with con: {concurrency}")
                     break  # Break the loop if the function completes successfully
                 except Exception as e:
                     # Log the error message
-                    error_timestamp = datetime.now().strftime("%d--%b--%Y %H:%M:%S")
+                    error_timestamp = datetime.now().strftime(
+                        "%d--%b--%Y %H:%M:%S"
+                    )
                     error_message = f"{error_timestamp} Error occurred: {e}. Retrying in 1 minute..."
                     write_string_to_log(RESULT_FILE, error_message)
                     print(error_message)
-                    
+
                     # Wait for 1 minute before retrying
                     time.sleep(60)
 
+
 @task
-def varied_para_plot(ctx, node = 3):
+def varied_para_plot(ctx, node=3):
     """
     Plot the 'varied parallelism' experiment
     """
     if node == 5:
-        data = extract_data("tasks/stream/logs/exp_mo_para_5nodes.txt", "mo_alert")
+        data = extract_data(
+            "tasks/stream/logs/exp_mo_para_5nodes.txt", "mo_alert"
+        )
     else:
         data = extract_data("tasks/stream/logs/exp_mo_para.txt", "mo_alert")
 
     df = pd.DataFrame(data)
 
-    df['Input Rate'] = df['Input Rate'].astype(int)
-    df['Scale'] = df['Scale'].astype(int)
-    df['99th Percentile Actual Time (ms)'] = df['99th Percentile Actual Time (ms)'].astype(float)
-    df['Throughput (msg/sec)'] = df['Throughput (msg/sec)'].astype(float)
-    df['Input Rate'] = df['Input Rate'].replace(9223372036854775807, float('inf'))
+    df["Input Rate"] = df["Input Rate"].astype(int)
+    df["Scale"] = df["Scale"].astype(int)
+    df["99th Percentile Actual Time (ms)"] = df[
+        "99th Percentile Actual Time (ms)"
+    ].astype(float)
+    df["Throughput (msg/sec)"] = df["Throughput (msg/sec)"].astype(float)
+    df["Input Rate"] = df["Input Rate"].replace(
+        9223372036854775807, float("inf")
+    )
     if node == 3:
-        df = df[(df['Input Rate'] != 18000) & (df['Input Rate'] != 20000)]
+        df = df[(df["Input Rate"] != 18000) & (df["Input Rate"] != 20000)]
     if node == 5:
-        df = df[(df['Input Rate'] != 20000)]
-    
-    pd.set_option('display.max_rows', None)
-    sorted_df = df.sort_values(by=['Scale', 'Input Rate'])
+        df = df[(df["Input Rate"] != 20000)]
+
+    pd.set_option("display.max_rows", None)
+    sorted_df = df.sort_values(by=["Scale", "Input Rate"])
     # print(sorted_df)
 
-    duplicates = df[df.duplicated(['Throughput (msg/sec)'], keep=False)]
+    duplicates = df[df.duplicated(["Throughput (msg/sec)"], keep=False)]
     print(duplicates)
 
-    grouped_counts = df.groupby(['Scale', 'Input Rate']).size().reset_index(name='counts')
+    grouped_counts = (
+        df.groupby(["Scale", "Input Rate"]).size().reset_index(name="counts")
+    )
     print(grouped_counts)
 
     if node == 5:
@@ -342,13 +419,14 @@ def varied_para_plot(ctx, node = 3):
     else:
         varied_para_plot_util(df, "mo", 3, "stream_mo_anomaly_0")
 
+
 # Experiment for different concurrency
 @task
 def varied_con_exp(ctx, scale=1):
     """
     Run the 'varied concurrency' experiments of spike detection application.
-    Basic setup: 
-    scale 1; batchsize 30; inputbatch 20; 
+    Basic setup:
+    scale 1; batchsize 30; inputbatch 20;
     input rates: 3000
     concurrency: 1, 2, 3, 4, 5
     runtime: 10 minutes or all the data are processed
@@ -356,7 +434,7 @@ def varied_con_exp(ctx, scale=1):
     global DURATION
     global RESULT_FILE
 
-    RESULT_FILE = 'tasks/stream/logs/exp_mo_cons.txt'
+    RESULT_FILE = "tasks/stream/logs/exp_mo_cons.txt"
     write_string_to_log(RESULT_FILE, CUTTING_LINE)
     write_string_to_log(RESULT_FILE, "experiment result: varied_con_exp")
 
@@ -366,11 +444,20 @@ def varied_con_exp(ctx, scale=1):
     rate = 16000
     for concurrency in concurrency_list:
         timestamp = datetime.now().strftime("%d--%b--%Y %H:%M:%S")
-        start_message = f"{timestamp} Running with rate={rate}, batchsize={batchsize}, concurrency={concurrency}, inputbatch={inputbatch}, scale={scale}, duration={DURATION}"   
+        start_message = f"{timestamp} Running with rate={rate}, batchsize={batchsize}, concurrency={concurrency}, inputbatch={inputbatch}, scale={scale}, duration={DURATION}"
         write_string_to_log(RESULT_FILE, start_message)
         # Call the test_contention task with the current batchsize
-        run(ctx, scale=scale, batchsize=batchsize, concurrency=concurrency, inputbatch=inputbatch, input_rate=rate, duration=DURATION)
+        run(
+            ctx,
+            scale=scale,
+            batchsize=batchsize,
+            concurrency=concurrency,
+            inputbatch=inputbatch,
+            input_rate=rate,
+            duration=DURATION,
+        )
         print(f"Completed test_contention with con: {concurrency}")
+
 
 @task
 def varied_con_plot(ctx):
@@ -384,18 +471,25 @@ def varied_con_plot(ctx):
     function_name = "stream_mo_anomaly_0"
     print(pd)
     df_filter = pd.DataFrame()
-    df_filter['Concurrency'] = df['Concurrency'].astype(int)
-    df_filter['Average Tuple Duration (µs)'] = df['Functions'].apply(lambda x: extract_avg_tuple_duration(x, function_name=function_name))
+    df_filter["Concurrency"] = df["Concurrency"].astype(int)
+    df_filter["Average Tuple Duration (µs)"] = df["Functions"].apply(
+        lambda x: extract_avg_tuple_duration(x, function_name=function_name)
+    )
 
-    pd.set_option('display.max_rows', None)
+    pd.set_option("display.max_rows", None)
 
-    grouped_counts = df.groupby(['Concurrency', 'Input Rate']).size().reset_index(name='counts')
+    grouped_counts = (
+        df.groupby(["Concurrency", "Input Rate"])
+        .size()
+        .reset_index(name="counts")
+    )
     print(grouped_counts)
 
-    duplicates = df[df.duplicated(['Throughput (msg/sec)'], keep=False)]
+    duplicates = df[df.duplicated(["Throughput (msg/sec)"], keep=False)]
     print(duplicates)
 
     varied_con_plot_util(df_filter, "mo")
+
 
 # Experiment for different batch size performance
 @task
@@ -411,7 +505,7 @@ def varied_batch_exp(ctx, scale=3):
     global DURATION
     global RESULT_FILE
 
-    RESULT_FILE = 'tasks/stream/logs/exp_mo_batch.txt'
+    RESULT_FILE = "tasks/stream/logs/exp_mo_batch.txt"
     write_string_to_log(RESULT_FILE, CUTTING_LINE)
     write_string_to_log(RESULT_FILE, "experiment result: varied_batch_exp")
     inputbatch = 500
@@ -424,24 +518,35 @@ def varied_batch_exp(ctx, scale=3):
     for batchsize in batchsize_list:
         for rate in rates:
             timestamp = datetime.now().strftime("%d--%b--%Y %H:%M:%S")
-            start_message = f"{timestamp} Running with rate={rate}, batchsize={batchsize}, concurrency={concurrency}, inputbatch={inputbatch}, scale={scale}, duration={DURATION}"   
+            start_message = f"{timestamp} Running with rate={rate}, batchsize={batchsize}, concurrency={concurrency}, inputbatch={inputbatch}, scale={scale}, duration={DURATION}"
             write_string_to_log(RESULT_FILE, start_message)
             # Call the test_contention task with the current batchsize
             while True:
                 try:
                     # Call the test_contention task with the current batchsize
-                    run(ctx, scale=scale, batchsize=batchsize, concurrency=concurrency, inputbatch=inputbatch, input_rate=rate, duration=DURATION)
+                    run(
+                        ctx,
+                        scale=scale,
+                        batchsize=batchsize,
+                        concurrency=concurrency,
+                        inputbatch=inputbatch,
+                        input_rate=rate,
+                        duration=DURATION,
+                    )
                     print(f"Completed test_contention with con: {concurrency}")
                     break  # Break the loop if the function completes successfully
                 except Exception as e:
                     # Log the error message
-                    error_timestamp = datetime.now().strftime("%d--%b--%Y %H:%M:%S")
+                    error_timestamp = datetime.now().strftime(
+                        "%d--%b--%Y %H:%M:%S"
+                    )
                     error_message = f"{error_timestamp} Error occurred: {e}. Retrying in 1 minute..."
                     write_string_to_log(RESULT_FILE, error_message)
                     print(error_message)
-                    
+
                     # Wait for 1 minute before retrying
                     time.sleep(60)
+
 
 @task
 def varied_batch_plot(ctx):
@@ -454,24 +559,33 @@ def varied_batch_plot(ctx):
 
     # Process DataFrame
     function_name = "stream_mo_alert_0"
-    df['Input Rate'] = df['Input Rate'].astype(int)
-    df['Batch Size'] = df['Batch Size'].astype(int)
-    df['99th Percentile Actual Time (ms)'] = df['99th Percentile Actual Time (ms)'].astype(float)
-    df['Input Rate'] = df['Input Rate'].replace(9223372036854775807, float('inf'))
+    df["Input Rate"] = df["Input Rate"].astype(int)
+    df["Batch Size"] = df["Batch Size"].astype(int)
+    df["99th Percentile Actual Time (ms)"] = df[
+        "99th Percentile Actual Time (ms)"
+    ].astype(float)
+    df["Input Rate"] = df["Input Rate"].replace(
+        9223372036854775807, float("inf")
+    )
 
-    pd.set_option('display.max_rows', None)
+    pd.set_option("display.max_rows", None)
     # print(df)
 
-    duplicates = df[df.duplicated(['Throughput (msg/sec)'], keep=False)]
+    duplicates = df[df.duplicated(["Throughput (msg/sec)"], keep=False)]
     print(duplicates)
 
-    sorted_df = df.sort_values(by=['Scale', 'Input Rate'])
+    sorted_df = df.sort_values(by=["Scale", "Input Rate"])
     # print(sorted_df)
 
-    grouped_counts = df.groupby(['Batch Size', 'Input Rate']).size().reset_index(name='counts')
+    grouped_counts = (
+        df.groupby(["Batch Size", "Input Rate"])
+        .size()
+        .reset_index(name="counts")
+    )
     print(grouped_counts)
 
     varied_batch_plot_util(df, "mo")
+
 
 @task
 def latency_exp(ctx, scale=1):
@@ -481,7 +595,7 @@ def latency_exp(ctx, scale=1):
     global DURATION
     global RESULT_FILE
 
-    RESULT_FILE = 'tasks/stream/logs/exp_mo_latency.txt'
+    RESULT_FILE = "tasks/stream/logs/exp_mo_latency.txt"
     write_string_to_log(RESULT_FILE, CUTTING_LINE)
     write_string_to_log(RESULT_FILE, "experiment result: exp_mo_latency")
 
@@ -493,21 +607,31 @@ def latency_exp(ctx, scale=1):
 
     for scale in scale_list:
         timestamp = datetime.now().strftime("%d--%b--%Y %H:%M:%S")
-        start_message = f"{timestamp} Running with rate={rate}, batchsize={batchsize}, concurrency={concurrency}, inputbatch={inputbatch}, scale={scale}, duration={DURATION}"   
+        start_message = f"{timestamp} Running with rate={rate}, batchsize={batchsize}, concurrency={concurrency}, inputbatch={inputbatch}, scale={scale}, duration={DURATION}"
         write_string_to_log(RESULT_FILE, start_message)
         # Call the test_contention task with the current batchsize
         while True:
             try:
                 # Call the test_contention task with the current batchsize
-                run(ctx, scale=scale, batchsize=batchsize, concurrency=concurrency, inputbatch=inputbatch, input_rate=rate, duration=DURATION)
+                run(
+                    ctx,
+                    scale=scale,
+                    batchsize=batchsize,
+                    concurrency=concurrency,
+                    inputbatch=inputbatch,
+                    input_rate=rate,
+                    duration=DURATION,
+                )
                 print(f"Completed test_contention with con: {concurrency}")
                 break  # Break the loop if the function completes successfully
             except Exception as e:
                 # Log the error message
-                error_timestamp = datetime.now().strftime("%d--%b--%Y %H:%M:%S")
+                error_timestamp = datetime.now().strftime(
+                    "%d--%b--%Y %H:%M:%S"
+                )
                 error_message = f"{error_timestamp} Error occurred: {e}. Retrying in 1 minute..."
                 write_string_to_log(RESULT_FILE, error_message)
                 print(error_message)
-                
+
                 # Wait for 1 minute before retrying
                 time.sleep(60)

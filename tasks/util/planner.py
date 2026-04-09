@@ -283,6 +283,20 @@ def get_num_xvm_links_from_in_flight_apps(in_flight_apps):
     return total_xvm_links
 
 
+def configure_stream_params(settings):
+    """Resets stream parameters based on a dictionary."""
+    defaults = {
+        "dispatch_period": 50,  # Period to dispatch chained messages.
+        "batch_check_period": 50,  # Period to dispatch messages.
+        "planner_call_interval": 50,  # Period to set message result from scheduler.
+        "parallel_dispatch": 0,
+    }
+    # Merge defaults with specific settings
+    final_settings = {**defaults, **settings}
+    for key, value in final_settings.items():
+        reset_stream_parameter(key, value)
+
+
 def format_nodes(nodes):
     """
     Ensure each node dict has keys:
@@ -310,7 +324,6 @@ def run_application_with_input(
     pregenerated_work,
     result_file: str,
     num_input_threads: int,
-    scale: int,
     batchsize: int,
     concurrency: int,
     inputbatch: int,
@@ -321,14 +334,9 @@ def run_application_with_input(
     max_waiting_queue_size: int,
     persistent_state=None,
     num_hosts_scheduled_in=0,
+    # the following is temporarily not used.
     reschedule=True,
 ):
-    write_string_to_log(
-        result_file,
-        f"Input Rates:{input_rate}, Batchsize:{batchsize}, "
-        f"Concurrency:{concurrency}, InputBatch:{inputbatch}, Scale:{scale}\n",
-    )
-
     wait_for_running_apps()
 
     # Flush the scheduler and workers
@@ -345,38 +353,37 @@ def run_application_with_input(
 
     # Reset the parameters
     reset_stream_parameter("is_outputting", 0)
-    reset_stream_parameter("max_executors", 20)
-    reset_stream_parameter("batch_check_period", 10)
+    reset_stream_parameter("max_executors", concurrency)
     if batchsize > 0:
         reset_batch_size(batchsize)
 
-    # If schedule mode is 0 or 3 (Our designed scheduler or FaaSFlow scheduler)
-    if reschedule and schedule_mode in (7, 3, 5):
-        print("Pre-invoking the application...")
-        pre_num_batches = int(10000 / inputbatch)
-        if inputbatch == 1:
-            pre_num_batches = int(1000 / inputbatch)
-        for i in range(pre_num_batches):
-            msg_json = pregenerated_work[i][1]
-            invoke_by_consumer(
-                msg_json,
-                num_retries=1000,
-                sleep_period_secs=0.1,
-                end_time=time.time() + 10,
-            )
-        print("Pre-invocation complete, rescheduling...")
-        time.sleep(5)
-        wait_for_running_apps()
+    # If schedule mode is 3 (Our designed scheduler or FaaSFlow scheduler)
+    # This part is temporarily unused.
+    # if reschedule and schedule_mode in (7, 3, 5):
+    #     print("Pre-invoking the application...")
+    #     pre_num_batches = int(10000 / inputbatch)
+    #     if inputbatch == 1:
+    #         pre_num_batches = int(1000 / inputbatch)
+    #     for i in range(pre_num_batches):
+    #         msg_json = pregenerated_work[i][1]
+    #         invoke_by_consumer(
+    #             msg_json,
+    #             num_retries=1000,
+    #             sleep_period_secs=0.1,
+    #             end_time=time.time() + 10,
+    #         )
+    #     print("Pre-invocation complete, rescheduling...")
+    #     time.sleep(5)
+    #     wait_for_running_apps()
 
-        custom_request(key="reschedule", value="1")
-        print("Rescheduling complete.")
+    #     custom_request(key="reschedule", value="1")
+    #     print("Rescheduling complete.")
 
     reset_stream_parameter("max_inflight_reqs", max_inflight_reqs)
     reset_stream_parameter("max_waiting_queue_size", max_waiting_queue_size)
 
     # Initialize variables for running application
     atomic_counter = AtomicInteger(1)
-    input_threads = []
 
     # Launch multiple threads
     batch_queue = Queue()  # Bounded queue

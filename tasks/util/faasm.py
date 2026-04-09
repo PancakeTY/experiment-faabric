@@ -517,10 +517,13 @@ def statistics_result(
     min_start_ts = None
     max_finish_ts = None
     for app_result in batches_result:
-        actual_times, app_metrics, msg_start_ts, msg_finish_ts = (
-            get_faasm_metrics_from_json(
-                app_result, deadline, function_include, native
-            )
+        (
+            actual_times,
+            app_metrics,
+            msg_start_ts,
+            msg_finish_ts,
+        ) = get_faasm_metrics_from_json(
+            app_result, deadline, function_include, native
         )
         # Update the minimum start timestamp
         if msg_start_ts is None or msg_finish_ts is None:

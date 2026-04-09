@@ -4,4 +4,4 @@ from . import stateful
 
 ns = Collection(
     stateful,
-    )
+)

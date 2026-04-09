@@ -102,7 +102,7 @@ def batch_consumer(batch_queue, end_time):
         invoke_by_consumer(
             msg_json,
             num_retries=1000,
-            sleep_period_secs=0.1,
+            sleep_period_secs=0.5,
             end_time=end_time,
         )
 
