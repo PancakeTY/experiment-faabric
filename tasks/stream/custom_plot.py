@@ -809,13 +809,13 @@ def reconfig(ctx, app):
         smoothed_config,
         color="blue",
         linestyle="-",
-        label=f"With Reconfiguration (Smoothed, window={window_size})",
+        label=f"With Reconfiguration",
     )
     ax.plot(
         smoothed_noconfig,
         color="red",
         linestyle="--",
-        label=f"Without Reconfiguration (Smoothed, window={window_size})",
+        label=f"Without Reconfiguration",
     )
 
     ax.set_title("")
@@ -833,8 +833,10 @@ def reconfig(ctx, app):
         ax.set_ylim(20000, 28000)
 
     ax.set_xlabel("", fontsize=12)
-    ax.set_ylabel("Average Count", fontsize=15)
-    ax.legend()
+    # ax.set_ylabel("Throughput", fontsize=20)
+    ax.set_ylabel("", fontsize=12)
+    ax.legend(fontsize=18)
+    ax.tick_params(axis="both", which="major", labelsize=14)
     ax.grid(False)
     plt.tight_layout()
 

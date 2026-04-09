@@ -27,23 +27,19 @@ RESULT_FILE = "tasks/stream/logs/exp_sd_results.txt"
 INPUT_MAP = {"sensor_id": 3, "temperature": 4}
 
 
-@task
 def run(
-    ctx,
-    scale,
-    batchsize,
-    concurrency,
-    inputbatch,
-    input_rate,
-    duration,
-    schedule_mode,
     pregenerated_work,
+    input_rate,
+    inputbatch,
+    batchsize,
+    scale,
+    concurrency,
     max_inflight_reqs,
+    max_waiting_queue_size,
+    num_hosts_scheduled_in,
+    schedule_mode,
 ):
-    """
-    Test the 'an' function with resource contention.
-    Input rate unit: data/ second
-    """
+    """Input rate unit: data/second"""
     global APPLICATION_NAME, INPUT_MSG, RESULT_FILE, NUM_INPUT_THREADS
 
     node1 = {
@@ -66,17 +62,18 @@ def run(
     run_application_with_input(
         application_name=APPLICATION_NAME,
         nodes=nodes,
-        pregenerated_work=pregenerated_work,
         result_file=RESULT_FILE,
         num_input_threads=NUM_INPUT_THREADS,
-        scale=scale,
+        duration=DURATION,
+        pregenerated_work=pregenerated_work,
+        input_rate=input_rate,
+        inputbatch=inputbatch,
         batchsize=batchsize,
         concurrency=concurrency,
-        inputbatch=inputbatch,
-        input_rate=input_rate,
-        duration=duration,
-        schedule_mode=schedule_mode,
         max_inflight_reqs=max_inflight_reqs,
+        max_waiting_queue_size=max_waiting_queue_size,
+        num_hosts_scheduled_in=num_hosts_scheduled_in,
+        schedule_mode=schedule_mode,
     )
 
 
@@ -506,7 +503,7 @@ def test3(ctx, scale=2):
 
     runtime_reconfig = 1
     rates = [20000000]
-    schedule_modes = [7, 5, 3]*4
+    schedule_modes = [7, 5, 3] * 4
 
     reset_stream_parameter("dispatch_period", 20)
     reset_stream_parameter("batch_check_period", 20)
@@ -544,3 +541,108 @@ def test3(ctx, scale=2):
                 max_inflight_reqs=max_inflight_reqs,
             )
             print(f"Completed test_contention with con: {concurrency}")
+
+
+def configure_stream_params(settings):
+    """Resets stream parameters based on a dictionary."""
+    defaults = {
+        "dispatch_period": 20,
+        "batch_check_period": 20,
+        "planner_call_interval": 20,
+        "parallel_dispatch": 0,
+    }
+    # Merge defaults with specific settings
+    final_settings = {**defaults, **settings}
+    for key, value in final_settings.items():
+        reset_stream_parameter(key, value)
+
+
+def get_pregenerated_work(batch_size):
+    """Loads and prepares the input data."""
+    records = read_data_from_txt_file_noparse(INPUT_FILE)
+    return (
+        generate_all_input_batch(records, batch_size, INPUT_MAP, INPUT_MSG)
+        * 30
+    )
+
+
+def execute_benchmark(
+    ctx,
+    result_file,
+    duration,
+    rates,
+    inputbatch,
+    batchsize,
+    scale,  # Scale means the parallelism of the stateful operator.
+    concurrency,  # Concurrency means the number of executors running in one worker.
+    max_inflight,
+    max_waiting_queue_size,
+    hosts_range,
+    schedule_modes=[0],
+    reconfig_period=1000,
+    # The following parameters are not used.
+    reconfig=0,
+    alpha=300,
+):
+    global RESULT_FILE, DURATION
+
+    RESULT_FILE = result_file
+    DURATION = duration
+
+    write_string_to_log(RESULT_FILE, CUTTING_LINE)
+    configure_stream_params(
+        {
+            "runtime_reconfig": reconfig,
+            "runtime_reconfig_period": reconfig_period,
+            "alpha": alpha,
+        }
+    )
+
+    work = get_pregenerated_work(inputbatch)
+
+    for mode in schedule_modes:
+        for rate, num_hosts in (
+            [(rates[0], h) for h in hosts_range]
+            if hosts_range
+            else [(r, 0) for r in rates]
+        ):
+            timestamp = datetime.now().strftime("%d--%b--%Y %H:%M:%S")
+            msg = (
+                f"{timestamp} Running with rate={rate}, batchsize={batchsize}, "
+                f"concurrency={concurrency}, inputbatch={inputbatch}, "
+                f"scale={scale}, duration={DURATION}, schedulemode={mode}, "
+                f"hosts={num_hosts}, max_inflight={max_inflight}"
+            )
+            write_string_to_log(RESULT_FILE, msg)
+
+            run(
+                pregenerated_work=work,
+                input_rate=rate,
+                inputbatch=inputbatch,
+                batchsize=batchsize,
+                scale=scale,
+                concurrency=concurrency,
+                max_inflight_reqs=max_inflight,
+                max_waiting_queue_size=max_waiting_queue_size,
+                num_hosts_scheduled_in=num_hosts,
+                schedule_mode=mode,
+            )
+            print(f"Completed test with con: {concurrency}")
+
+
+@task
+def host(ctx, scale=5):
+    execute_benchmark(
+        ctx,
+        result_file="tasks/stream/logs_elst/host_sd_fix_rate_1.txt",
+        duration=50,
+        scale=scale,
+        schedule_modes=[0],
+        inputbatch=500,
+        rates=[3000],
+        max_inflight=3000,
+        max_waiting_queue_size=3000,
+        batchsize=1,
+        hosts_range=[1, 3, 5, 7, 10],
+        reconfig_period=1000,
+    )

@@ -318,6 +318,7 @@ def run_application_with_input(
     duration: float,
     schedule_mode: int,
     max_inflight_reqs: int,
+    max_waiting_queue_size: int,
     persistent_state=None,
     num_hosts_scheduled_in=0,
     reschedule=True,
@@ -335,8 +336,8 @@ def run_application_with_input(
 
     reset_stream_parameter("schedule_mode", schedule_mode)
     format_nodes(nodes)
-    # if num_hosts_scheduled_in > 0:
-    reset_stream_parameter("num_hosts_scheduled", 3)
+    if num_hosts_scheduled_in is not None and num_hosts_scheduled_in > 0:
+        reset_stream_parameter("num_hosts_scheduled", num_hosts_scheduled_in)
     register_application(application_name, nodes)
 
     if persistent_state is not None:
@@ -344,7 +345,8 @@ def run_application_with_input(
 
     # Reset the parameters
     reset_stream_parameter("is_outputting", 0)
-    reset_stream_parameter("max_executors", 40)
+    reset_stream_parameter("max_executors", 20)
+    reset_stream_parameter("batch_check_period", 10)
     if batchsize > 0:
         reset_batch_size(batchsize)
 
@@ -370,6 +372,7 @@ def run_application_with_input(
         print("Rescheduling complete.")
 
     reset_stream_parameter("max_inflight_reqs", max_inflight_reqs)
+    reset_stream_parameter("max_waiting_queue_size", max_waiting_queue_size)
 
     # Initialize variables for running application
     atomic_counter = AtomicInteger(1)

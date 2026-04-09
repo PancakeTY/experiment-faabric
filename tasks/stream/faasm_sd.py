@@ -34,23 +34,27 @@ CURRENT_DATE = datetime.now().strftime("%Y-%m-%d")
 DURATION = 600
 INPUT_BATCHSIZE = 1
 NUM_INPUT_THREADS = 10
-INPUT_FILE = 'tasks/stream/data/data_sensor_sorted.txt'
+INPUT_FILE = "tasks/stream/data/data_sensor_sorted.txt"
 INPUT_MSG = {
     "user": "stream",
     "function": "sd_moving_avg",
 }
-RESULT_FILE = 'tasks/stream/logs/exp_sd_results_cons_new.txt'
+RESULT_FILE = "tasks/stream/logs/exp_sd_results_cons_new.txt"
 MAX_INPUT_COUNT = None
 INPUT_MAP = {"sensorId": 3, "temperature": 4}
 
+
 @task(default=True)
-def run(ctx, input_rate, inputbatch = 1):
+def run(ctx, input_rate, inputbatch=1):
     """
     Use multiple threads to run the 'wordcount' application and check latency and throughput.
     """
     global INPUT_FILE, INPUT_MSG, RESULT_FILE, INPUT_MAP, NUM_INPUT_THREADS, DURATION
 
-    write_string_to_log(RESULT_FILE, f"New Exp --- Input Rates:{input_rate}, Batchsize: {inputbatch}, Workers: {NUM_INPUT_THREADS}, duration:{DURATION} \n")
+    write_string_to_log(
+        RESULT_FILE,
+        f"New Exp --- Input Rates:{input_rate}, Batchsize: {inputbatch}, Workers: {NUM_INPUT_THREADS}, duration:{DURATION} \n",
+    )
     records = read_data_from_txt_file(INPUT_FILE)
     flush_workers()
     flush_scheduler()
@@ -79,7 +83,7 @@ def run(ctx, input_rate, inputbatch = 1):
             batch_queue,
             end_time,
             input_rate,
-            NUM_INPUT_THREADS
+            NUM_INPUT_THREADS,
         )
 
         # Start consumer threads
@@ -93,14 +97,16 @@ def run(ctx, input_rate, inputbatch = 1):
                     INPUT_MSG,
                     inputbatch,
                     end_time,
-                )
+                ),
             )
             input_threads.append(thread)
             thread.start()
 
     print(f"length of result json is {len(result_list)}")
 
-    np_result_message, function_metrics = statistics_result(result_list, DURATION, native = True)
+    np_result_message, function_metrics = statistics_result(
+        result_list, DURATION, native=True
+    )
     print(np_result_message)
     write_string_to_log(RESULT_FILE, np_result_message)
 
@@ -111,65 +117,73 @@ def run(ctx, input_rate, inputbatch = 1):
             print(f"  Average {metric_name}: {int(average_metric_time)} μs")
     write_metrics_to_log(RESULT_FILE, function_metrics)
 
+
 @task
 def overall_exp(ctx):
     global DURATION
     global RESULT_FILE
     global MAX_INPUT_COUNT
-    global NUM_INPUT_THREADS 
+    global NUM_INPUT_THREADS
 
     NUM_INPUT_THREADS = 10
 
     DURATION = 600
-    RESULT_FILE = 'tasks/stream/logs/native_exp_sd_overall.txt'
+    RESULT_FILE = "tasks/stream/logs/native_exp_sd_overall.txt"
     write_string_to_log(RESULT_FILE, CUTTING_LINE)
-    write_string_to_log(RESULT_FILE, "experiment result: native_exp_sd_overall")
+    write_string_to_log(
+        RESULT_FILE, "experiment result: native_exp_sd_overall"
+    )
 
     # input_rates = [1, 1000, 3000, 10000, 18000, 26000]
     input_rates = [18000, 26000]
 
     for rate in input_rates:
-        run(ctx, input_rate = rate, inputbatch = 1)
+        run(ctx, input_rate=rate, inputbatch=1)
 
 
 @task
 def latency_exp_3node(ctx):
     """
-        inv stream.faasm-sd.latency-exp-3node
+    inv stream.faasm-sd.latency-exp-3node
     """
     global DURATION
     global RESULT_FILE
     global MAX_INPUT_COUNT
-    global NUM_INPUT_THREADS 
+    global NUM_INPUT_THREADS
 
     NUM_INPUT_THREADS = 1
 
     DURATION = 600
-    RESULT_FILE = 'tasks/stream/logs/native_sd_latency_3node.txt'
+    RESULT_FILE = "tasks/stream/logs/native_sd_latency_3node.txt"
     write_string_to_log(RESULT_FILE, CUTTING_LINE)
-    write_string_to_log(RESULT_FILE, "experiment result: native_sd_latency_3node")
+    write_string_to_log(
+        RESULT_FILE, "experiment result: native_sd_latency_3node"
+    )
 
     input_rates = [1]
     for input_rate in input_rates:
-        run(ctx, input_rate = input_rate, inputbatch = 1)
+        run(ctx, input_rate=input_rate, inputbatch=1)
+
 
 @task
 def latency_exp_1node(ctx):
     """
-        inv stream.faasm-sd.latency-exp-1node
+    inv stream.faasm-sd.latency-exp-1node
     """
     global DURATION
     global RESULT_FILE
     global MAX_INPUT_COUNT
-    global NUM_INPUT_THREADS 
+    global NUM_INPUT_THREADS
 
     NUM_INPUT_THREADS = 1
 
     DURATION = 600
-    RESULT_FILE = 'tasks/stream/logs/native_sd_latency_1node.txt'
+    RESULT_FILE = "tasks/stream/logs/native_sd_latency_1node.txt"
     write_string_to_log(RESULT_FILE, CUTTING_LINE)
-    write_string_to_log(RESULT_FILE, "experiment result: native_sd_latency_1node")
+    write_string_to_log(
+        RESULT_FILE, "experiment result: native_sd_latency_1node"
+    )
 
     input_rates = [1]
     for input_rate in input_rates:
-        run(ctx, input_rate = input_rate, inputbatch = 1)
+        run(ctx, input_rate=input_rate, inputbatch=1)
